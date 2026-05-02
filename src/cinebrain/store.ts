@@ -153,10 +153,8 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
     let csvProgress = 0;
     let pdfProgress = 0;
     const updateParseProgress = () => {
-      // CSV drives up to 25%, PDF drives up to 50% — we take the max
-      const csvContrib = csvProgress * 25;
-      const pdfContrib = pdfProgress * 50;
-      set({ ingestionProgress: Math.round(Math.max(csvContrib, pdfContrib)) });
+      const combined = Math.round(((csvProgress + pdfProgress) / 2) * 50);
+      set({ ingestionProgress: combined });
     };
 
     const [csvResult, pdfResult] = await Promise.all([

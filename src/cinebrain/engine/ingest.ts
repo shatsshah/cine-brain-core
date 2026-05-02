@@ -160,25 +160,8 @@ export async function parsePDF(
       const line = lines[li];
       // Look for Netflix PDF patterns: title followed by thumb indicator
       // Filled = Like, Hollow = Dislike
-      let sentiment: "like" | "dislike" | "neutral" = "neutral";
       let cleanTitle = line;
-
-      if (line.includes("👍") || line.includes("Liked") || line.includes("✓") || line.includes("Filled")) {
-        sentiment = "like";
-        cleanTitle = line
-          .replace(/👍|Liked|✓|Filled|\|/gi, "")
-          .trim();
-      } else if (
-        line.includes("👎") ||
-        line.includes("Disliked") ||
-        line.includes("✗") ||
-        line.includes("Hollow")
-      ) {
-        sentiment = "dislike";
-        cleanTitle = line
-          .replace(/👎|Disliked|✗|Hollow|\|/gi, "")
-          .trim();
-      } else if (line.includes("| ?") || line.match(/\|\s*$/)) {
+      if (line.includes("| ?") || line.match(/\|\s*$/)) {
         // The "| ?" or trailing pipe indicates where thumb icons would be
         cleanTitle = line.replace(/\|\s*\??$/, "").trim();
       }
@@ -199,9 +182,10 @@ export async function parsePDF(
       )
         continue;
 
+      // PDF = liked movies list. Every title extracted is a like.
       titles.push({
         title: cleanTitle,
-        sentiment,
+        sentiment: "like",
         source: "pdf",
       });
 

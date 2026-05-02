@@ -35,6 +35,7 @@ function useScrubTheater() {
   const streamingTitles = useCineBrainStore((s) => s.streamingTitles);
   const movies = useCineBrainStore((s) => s.movies);
   const isIngesting = useCineBrainStore((s) => s.isIngesting);
+  const hasIngested = useCineBrainStore((s) => s.hasIngested);
 
   const [rows, setRows] = useState<ScrubRow[]>([]);
   const processedCount = useRef(0);
@@ -68,12 +69,14 @@ function useScrubTheater() {
 
   // ── Fallback: cycle through movie titles when idle ──
   useEffect(() => {
-    // Stop fallback if we have real streaming data
-    if (streamingTitles.length > 0 || isIngesting) {
+    // Don't run fallback if we are ingesting OR if real data has ever been loaded
+    if (streamingTitles.length > 0 || isIngesting || hasIngested) {
       if (fallbackRef.current) {
         clearInterval(fallbackRef.current);
         fallbackRef.current = null;
       }
+      // Also clear rows when ingestion starts, so mock titles don't persist
+      if (isIngesting) setRows([]);
       return;
     }
 
@@ -109,7 +112,7 @@ function useScrubTheater() {
         fallbackRef.current = null;
       }
     };
-  }, [streamingTitles.length, isIngesting, movies]);
+  }, [streamingTitles.length, isIngesting, movies, hasIngested]);
 
   // ── Stream real titles when they arrive from ingestion ──
   useEffect(() => {
