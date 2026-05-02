@@ -3,25 +3,40 @@ import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import { SectionHeader } from "../components/SectionHeader";
-import { movies, archetype, Movie } from "../data";
+import { useCineBrainStore } from "../store";
+import type { EnrichedMovie } from "../types";
 import { Sparkles } from "lucide-react";
 
 export const TasteUniverse = () => {
-  const [selected, setSelected] = useState<Movie>(movies[0]);
-  const [weights, setWeights] = useState({ visual: 50, textual: 50, acoustic: 40, mystery: 70, dread: 60, pacing: 40 });
+  const movies = useCineBrainStore((s) => s.movies);
+  const archetype = useCineBrainStore((s) => s.archetype);
+  const storeWeights = useCineBrainStore((s) => s.weights);
+  const setStoreWeights = useCineBrainStore((s) => s.setWeights);
+  const rerank = useCineBrainStore((s) => s.rerank);
+  const selectMovie = useCineBrainStore((s) => s.selectMovie);
+  const selectedMovieId = useCineBrainStore((s) => s.selectedMovieId);
+
+  const selected = movies.find((m) => m.id === selectedMovieId) || movies[0];
   const [shake, setShake] = useState(0);
 
   const ranked = useMemo(() => {
-    const wt = (m: Movie) =>
-      (m.visual * weights.visual + m.textual * weights.textual + m.acoustic * weights.acoustic) /
-      (weights.visual + weights.textual + weights.acoustic);
-    return [...movies].sort((a, b) => wt(b) - wt(a)).slice(0, 5).map(m => m.id);
-  }, [weights]);
+    const wt = (m: EnrichedMovie) =>
+      (m.visual * storeWeights.visual + m.textual * storeWeights.textual + m.acoustic * storeWeights.acoustic) /
+      (storeWeights.visual + storeWeights.textual + storeWeights.acoustic);
+    return [...movies].sort((a, b) => wt(b) - wt(a)).slice(0, 5).map((m) => m.id);
+  }, [movies, storeWeights]);
 
   const matchScore = useMemo(() => {
-    const total = weights.visual + weights.textual + weights.acoustic;
-    return Math.round((selected.visual * weights.visual + selected.textual * weights.textual + selected.acoustic * weights.acoustic) / total);
-  }, [selected, weights]);
+    if (!selected) return 0;
+    const total = storeWeights.visual + storeWeights.textual + storeWeights.acoustic;
+    if (total === 0) return 50;
+    return Math.round((selected.visual * storeWeights.visual + selected.textual * storeWeights.textual + selected.acoustic * storeWeights.acoustic) / total);
+  }, [selected, storeWeights]);
+
+  const handleRerank = () => {
+    setShake((s) => s + 1);
+    rerank();
+  };
 
   return (
     <section id="universe" className="relative px-6 md:px-12 py-24 bg-background overflow-hidden">
@@ -39,7 +54,7 @@ export const TasteUniverse = () => {
               <Suspense fallback={null}>
                 <ambientLight intensity={0.4} />
                 <pointLight position={[0, 0, 0]} intensity={2} color={"#f59e0b"} />
-                <Galaxy movies={movies} selected={selected.id} top5={ranked} onSelect={setSelected} shake={shake} />
+                <Galaxy movies={movies} selected={selected?.id || ""} top5={ranked} onSelect={(m) => selectMovie(m.id)} shake={shake} />
                 <OrbitControls enablePan={false} minDistance={2} maxDistance={9} autoRotate autoRotateSpeed={0.4} />
               </Suspense>
             </Canvas>
@@ -55,46 +70,56 @@ export const TasteUniverse = () => {
           <div className="space-y-4">
             <div className="panel p-5">
               <span className="label-mono">Identity</span>
-              <div className="mt-3 flex items-center gap-3">
-                <div className="w-14 h-14 rounded-md flex items-center justify-center text-2xl"
-                  style={{ background: `linear-gradient(135deg, ${selected.posterColors[0]}, ${selected.posterColors[4]})` }}>{selected.poster}</div>
-                <div>
-                  <div className="font-serif text-lg font-bold leading-tight" style={{ fontFamily: "'Playfair Display', serif" }}>{selected.title}</div>
-                  <div className="font-mono text-[11px] text-muted-foreground">{selected.year}</div>
-                </div>
-              </div>
-              <div className="mt-4 text-center">
-                <div className="font-serif text-5xl font-black text-gradient-neon" style={{ fontFamily: "'Playfair Display', serif" }}>{matchScore}%</div>
-                <div className="label-mono mt-1">Overall Match · updates live</div>
-              </div>
+              {selected && (
+                <>
+                  <div className="mt-3 flex items-center gap-3">
+                    <div className="w-14 h-14 rounded-md flex items-center justify-center text-2xl overflow-hidden"
+                      style={{ background: selected.posterUrl ? undefined : `linear-gradient(135deg, ${selected.posterColors[0]}, ${selected.posterColors[4] || selected.posterColors[1]})` }}>
+                      {selected.posterUrl ? (
+                        <img src={selected.posterUrl} alt="" className="w-full h-full object-cover" />
+                      ) : "🎬"}
+                    </div>
+                    <div>
+                      <div className="font-serif text-lg font-bold leading-tight" style={{ fontFamily: "'Playfair Display', serif" }}>{selected.title}</div>
+                      <div className="font-mono text-[11px] text-muted-foreground">{selected.year} · {selected.genre}</div>
+                    </div>
+                  </div>
+                  <div className="mt-4 text-center">
+                    <div className="font-serif text-5xl font-black text-gradient-neon" style={{ fontFamily: "'Playfair Display', serif" }}>{matchScore}%</div>
+                    <div className="label-mono mt-1">Overall Match · updates live</div>
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="panel p-5">
               <span className="label-mono">Transparency Core</span>
-              <div className="mt-3 space-y-3">
-                <Bar label="Visual Model" value={selected.visual} color="hsl(var(--cyan))" tags={["Neon palette","High contrast","Shadows"]} />
-                <Bar label="Textual Model" value={selected.textual} color="hsl(var(--neon))" tags={selected.themes.slice(0,3)} />
-                <Bar label="Acoustic Model" value={selected.acoustic} color="hsl(var(--crimson))" tags={["Synth-driven","High Sensory Chaos"]} />
-              </div>
+              {selected && (
+                <div className="mt-3 space-y-3">
+                  <Bar label="Visual Model" value={selected.visual} color="hsl(var(--cyan))" tags={selected.evidence.slice(0, 2)} />
+                  <Bar label="Textual Model" value={selected.textual} color="hsl(var(--neon))" tags={selected.themes.slice(0, 3)} />
+                  <Bar label="Acoustic Model" value={selected.acoustic} color="hsl(var(--crimson))" tags={[selected.evidence.find((e) => e.includes("Synth") || e.includes("Orchestral") || e.includes("Ambient") || e.includes("Percussive")) || "Audio", selected.evidence.find((e) => e.includes("Sensory") || e.includes("Stimuli")) || "Analysis"]} />
+                </div>
+              )}
             </div>
 
             <div className="panel p-5">
               <span className="label-mono">Tweak Panel</span>
               <div className="mt-3 space-y-2.5">
                 {([
-                  ["visual","Visual weight"],["textual","Textual weight"],["acoustic","Acoustic weight"],
-                  ["mystery","Mystery"],["dread","Dread"],["pacing","Pacing"],
+                  ["visual", "Visual weight"], ["textual", "Textual weight"], ["acoustic", "Acoustic weight"],
+                  ["mystery", "Mystery"], ["dread", "Dread"], ["pacing", "Pacing"],
                 ] as const).map(([k, l]) => (
                   <div key={k} className="grid grid-cols-[110px_1fr_36px] items-center gap-2">
                     <span className="text-xs text-foreground/80">{l}</span>
-                    <input type="range" min={0} max={100} value={(weights as any)[k]}
-                      onChange={e => setWeights(w => ({ ...w, [k]: +e.target.value }))}
+                    <input type="range" min={0} max={100} value={storeWeights[k]}
+                      onChange={(e) => setStoreWeights({ [k]: +e.target.value })}
                       className="accent-primary w-full" />
-                    <span className="font-mono text-[11px] text-muted-foreground text-right">{(weights as any)[k]}</span>
+                    <span className="font-mono text-[11px] text-muted-foreground text-right">{storeWeights[k]}</span>
                   </div>
                 ))}
               </div>
-              <button onClick={() => setShake(s => s + 1)} className="mt-4 w-full py-3 rounded-lg border border-primary/40 bg-primary/10 hover:bg-primary/20 font-mono text-xs tracking-[0.22em] text-primary">
+              <button onClick={handleRerank} className="mt-4 w-full py-3 rounded-lg border border-primary/40 bg-primary/10 hover:bg-primary/20 font-mono text-xs tracking-[0.22em] text-primary">
                 RE-RANK MY GALAXY ↗
               </button>
             </div>
@@ -111,7 +136,7 @@ export const TasteUniverse = () => {
                 </h3>
                 <p className="mt-4 text-foreground/80 max-w-2xl leading-relaxed">{archetype.blurb}</p>
                 <div className="mt-5 flex flex-wrap gap-2">
-                  {archetype.films.map(f => <span key={f} className="chip">{f}</span>)}
+                  {archetype.films.map((f) => <span key={f} className="chip">{f}</span>)}
                 </div>
               </div>
               <div className="flex flex-col items-center justify-center">
@@ -135,23 +160,22 @@ const Bar = ({ label, value, color, tags }: { label: string; value: number; colo
       <div className="h-full rounded-full transition-[width] duration-700" style={{ width: `${value}%`, background: color, boxShadow: `0 0 10px ${color}` }} />
     </div>
     <div className="mt-1.5 flex flex-wrap gap-1">
-      {tags.map(t => <span key={t} className="text-[10px] font-mono text-muted-foreground border border-border rounded-full px-2 py-0.5">{t}</span>)}
+      {tags.map((t) => <span key={t} className="text-[10px] font-mono text-muted-foreground border border-border rounded-full px-2 py-0.5">{t}</span>)}
     </div>
   </div>
 );
 
 const Galaxy = ({ movies, selected, top5, onSelect, shake }: {
-  movies: Movie[]; selected: string; top5: string[]; onSelect: (m: Movie) => void; shake: number;
+  movies: EnrichedMovie[]; selected: string; top5: string[]; onSelect: (m: EnrichedMovie) => void; shake: number;
 }) => {
   const positions = useRef<Record<string, THREE.Vector3>>({});
   useMemo(() => {
-    movies.forEach(m => { positions.current[m.id] = new THREE.Vector3(m.x * 2.2, m.y * 1.6, m.z * 1.2); });
+    movies.forEach((m) => { positions.current[m.id] = new THREE.Vector3(m.x * 2.2, m.y * 1.6, m.z * 1.2); });
   }, [movies]);
 
-  // Re-rank shake: jitter targets
   const targets = useMemo(() => {
     const out: Record<string, THREE.Vector3> = {};
-    movies.forEach(m => {
+    movies.forEach((m) => {
       const j = (Math.sin(shake * 7.7 + m.x * 11) * 0.25);
       const k = (Math.cos(shake * 5.3 + m.y * 13) * 0.25);
       out[m.id] = new THREE.Vector3(m.x * 2.2 + j, m.y * 1.6 + k, m.z * 1.2);
@@ -161,17 +185,14 @@ const Galaxy = ({ movies, selected, top5, onSelect, shake }: {
 
   return (
     <group>
-      {/* Background stars */}
       {Array.from({ length: 200 }).map((_, i) => (
         <mesh key={i} position={[(Math.random() - 0.5) * 14, (Math.random() - 0.5) * 10, (Math.random() - 0.5) * 8 - 2]}>
           <sphereGeometry args={[0.012, 6, 6]} />
           <meshBasicMaterial color={Math.random() > 0.5 ? "#a855f7" : "#06b6d4"} />
         </mesh>
       ))}
-      {/* Sun */}
       <Sun />
-      {/* Movie stars */}
-      {movies.map(m => (
+      {movies.map((m) => (
         <Star key={m.id} movie={m} target={targets[m.id]} positions={positions} selected={selected === m.id} top5={top5.includes(m.id)} onSelect={onSelect} />
       ))}
     </group>
@@ -195,12 +216,16 @@ const Sun = () => {
   );
 };
 
-const Star = ({ movie, target, positions, selected, top5, onSelect }: any) => {
+const Star = ({ movie, target, positions, selected, top5, onSelect }: {
+  movie: EnrichedMovie; target: THREE.Vector3; positions: React.MutableRefObject<Record<string, THREE.Vector3>>;
+  selected: boolean; top5: boolean; onSelect: (m: EnrichedMovie) => void;
+}) => {
   const ref = useRef<THREE.Mesh>(null!);
   const ringRef = useRef<THREE.Mesh>(null!);
   useFrame(({ clock }) => {
     if (!ref.current) return;
     const cur = positions.current[movie.id];
+    if (!cur || !target) return;
     cur.lerp(target, 0.04);
     ref.current.position.copy(cur);
     if (ringRef.current) {

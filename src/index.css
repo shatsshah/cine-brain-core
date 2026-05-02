@@ -121,6 +121,14 @@
 .animate-float-card { animation: float-card 7s ease-in-out infinite; }
 .animate-sweep { animation: sweep 3.2s ease-in-out infinite; }
 
+@keyframes flash-red {
+  0% { background: hsl(var(--crimson) / 0.3); transform: translateX(0); }
+  25% { transform: translateX(-2px); }
+  50% { transform: translateX(2px); }
+  75% { transform: translateX(-1px); }
+  100% { background: transparent; transform: translateX(0); }
+}
+
 /* Scrollbars */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: hsl(var(--void)); }

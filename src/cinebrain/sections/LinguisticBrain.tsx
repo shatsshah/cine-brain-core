@@ -1,22 +1,32 @@
 import { useState } from "react";
 import { SectionHeader } from "../components/SectionHeader";
-import { themes, driftPoints, movies } from "../data";
-import { Send, AlertTriangle } from "lucide-react";
+import { useCineBrainStore } from "../store";
+import { Send, AlertTriangle, Loader2 } from "lucide-react";
 
 export const LinguisticBrain = () => {
+  const movies = useCineBrainStore((s) => s.movies);
+  const themeWeights = useCineBrainStore((s) => s.themeWeights);
+  const driftPoints = useCineBrainStore((s) => s.driftPoints);
+  const paradoxCards = useCineBrainStore((s) => s.paradoxCards);
+  const sentimentSegments = useCineBrainStore((s) => s.sentimentSegments);
+  const convo = useCineBrainStore((s) => s.convo);
+  const sendMessage = useCineBrainStore((s) => s.sendMessage);
+  const isLLMLoading = useCineBrainStore((s) => s.isLLMLoading);
+
   const [unzipped, setUnzipped] = useState(false);
-  const [convo, setConvo] = useState<{ q: string; a: string }[]>([
-    { q: "Why do I keep returning to dystopias?", a: "You don't return to ruin — you return to the one warm window inside it. Your taste isn't drawn to collapse; it's drawn to intimacy that survives collapse. Blade Runner 2049 is a love letter held in radioactive air." },
-  ]);
   const [input, setInput] = useState("");
 
-  const send = () => {
-    if (!input.trim()) return;
+  const send = async () => {
+    if (!input.trim() || isLLMLoading) return;
     const q = input;
     setInput("");
-    setTimeout(() => {
-      setConvo(c => [...c, { q, a: "The neon never lies, friend. You orbit films where silence carries more weight than dialogue — where the mood is the protagonist. That's not a phase. That's an architecture." }]);
-    }, 350);
+    await sendMessage(q);
+  };
+
+  const paradox = paradoxCards[0] || {
+    text: "You prefer dystopias with intimate human connection over dystopias about societal collapse.",
+    trigger: "Hidden Trigger: Two-Person Dialogue",
+    confidence: 94,
   };
 
   return (
@@ -30,9 +40,9 @@ export const LinguisticBrain = () => {
           <div className="panel p-6 flex flex-col items-center">
             <div className="w-full flex items-center justify-between mb-4">
               <span className="label-mono">Plot-DNA Helix</span>
-              <button onClick={() => setUnzipped(u => !u)} className="chip hover:bg-primary/10">{unzipped ? "Re-zip" : "Unzip"}</button>
+              <button onClick={() => setUnzipped((u) => !u)} className="chip hover:bg-primary/10">{unzipped ? "Re-zip" : "Unzip"}</button>
             </div>
-            <Helix unzipped={unzipped} />
+            <Helix unzipped={unzipped} movies={movies} />
             <div className="flex gap-4 mt-4 text-xs">
               <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-primary" /> Surface Genres</span>
               <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-destructive" /> Thematic Soul</span>
@@ -43,8 +53,8 @@ export const LinguisticBrain = () => {
           <div className="panel panel-cyan p-6">
             <span className="label-mono">Theme Bubble Cloud</span>
             <div className="relative h-[340px] mt-3">
-              {themes.map((t, i) => {
-                const angle = (i / themes.length) * Math.PI * 2;
+              {themeWeights.slice(0, 10).map((t, i) => {
+                const angle = (i / Math.min(themeWeights.length, 10)) * Math.PI * 2;
                 const r = 80 + (100 - t.weight) * 1.2;
                 const size = 30 + (t.weight / 100) * 70;
                 const left = 50 + Math.cos(angle) * (r / 4);
@@ -71,17 +81,12 @@ export const LinguisticBrain = () => {
           <div className="panel p-6">
             <span className="label-mono">Sentiment Distribution</span>
             <div className="mt-4 grid grid-cols-2 gap-4 items-center">
-              <SentimentArc segs={[
-                { label: "Dark", val: 0.36, color: "hsl(var(--neon))" },
-                { label: "Tense", val: 0.28, color: "hsl(var(--crimson))" },
-                { label: "Ambiguous", val: 0.22, color: "hsl(var(--phantom))" },
-                { label: "Uplifting", val: 0.14, color: "hsl(var(--cyan))" },
-              ]} />
+              <SentimentArc segs={sentimentSegments} />
               <div className="space-y-2 text-sm">
-                {[["Dark", "36%", "hsl(var(--neon))"], ["Tense", "28%", "hsl(var(--crimson))"], ["Ambiguous", "22%", "hsl(var(--muted-foreground))"], ["Uplifting", "14%", "hsl(var(--cyan))"]].map(([l, v, c]) => (
-                  <div key={l} className="flex items-center justify-between">
-                    <span className="flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full" style={{ background: c }} />{l}</span>
-                    <span className="font-mono text-foreground/80">{v}</span>
+                {sentimentSegments.map((s) => (
+                  <div key={s.label} className="flex items-center justify-between">
+                    <span className="flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full" style={{ background: s.color }} />{s.label}</span>
+                    <span className="font-mono text-foreground/80">{Math.round(s.val * 100)}%</span>
                   </div>
                 ))}
               </div>
@@ -96,21 +101,23 @@ export const LinguisticBrain = () => {
               <span className="label-mono text-destructive">Subconscious Paradox</span>
             </div>
             <p className="font-serif text-2xl leading-snug" style={{ fontFamily: "'Playfair Display', serif" }}>
-              You prefer <em className="text-destructive">dystopias with intimate human connection</em> over dystopias about societal collapse.
+              {paradox.text.split(/(".*?")/).map((part, i) =>
+                part.startsWith('"') ? <em key={i} className="text-destructive">{part.replace(/"/g, '')}</em> : part
+              )}
             </p>
             <p className="text-muted-foreground mt-3 text-sm">
-              Across 47 watched films, the strongest predictor of a re-watch isn't genre — it's the presence of a single quiet conversation in the second act. Your taste isn't dystopian. It's <em>tender, framed by ruin.</em>
+              Across {movies.length} processed films, the strongest predictor of engagement isn't genre — it's the emotional architecture hidden beneath the surface. Your taste isn't what it appears to be.
             </p>
             <div className="mt-4 flex flex-wrap gap-1.5">
-              <span className="chip-crimson chip">Hidden Trigger: Two-Person Dialogue</span>
-              <span className="chip-crimson chip">94% confidence</span>
+              <span className="chip-crimson chip">{paradox.trigger}</span>
+              <span className="chip-crimson chip">{paradox.confidence}% confidence</span>
             </div>
           </div>
 
           {/* Drift timeline */}
           <div className="panel lg:col-span-2 p-6">
             <span className="label-mono">Narrative Drift — Mood Through Time</span>
-            <DriftChart />
+            <DriftChart points={driftPoints} />
           </div>
 
           {/* Dialogue constellation */}
@@ -127,7 +134,7 @@ export const LinguisticBrain = () => {
             </div>
             <div className="relative">
               <span className="label-mono">Dialogue Constellation</span>
-              <p className="text-muted-foreground text-sm mt-1">Ask in the tone of your favorite films. The brain answers as a Neo-Noir narrator.</p>
+              <p className="text-muted-foreground text-sm mt-1">Ask in the tone of your favorite films. The brain answers as a personified archetype.</p>
 
               <div className="mt-5 space-y-4 max-h-[260px] overflow-y-auto pr-2">
                 {convo.map((c, i) => (
@@ -137,20 +144,35 @@ export const LinguisticBrain = () => {
                       <div className="text-foreground">{c.q}</div>
                     </div>
                     <div className="rounded-xl p-4 bg-[hsl(var(--phantom))] border border-accent/30 font-mono text-sm">
-                      <div className="label-mono mb-2 text-accent">CINE-BRAIN · NEO-NOIR</div>
+                      <div className="label-mono mb-2 text-accent">CINE-BRAIN · ARCHETYPE</div>
                       <div className="text-foreground/90 leading-relaxed">{c.a}</div>
                     </div>
                   </div>
                 ))}
+                {isLLMLoading && (
+                  <div className="flex items-center gap-2 text-muted-foreground text-sm">
+                    <Loader2 className="w-4 h-4 animate-spin text-accent" />
+                    <span className="font-mono text-[11px] animate-blink">Brain is thinking...</span>
+                  </div>
+                )}
               </div>
 
               <div className="mt-5 flex gap-2">
                 <div className="flex-1 flex items-center gap-2 rounded-lg border border-accent/40 bg-card/60 px-3">
                   <span className="text-accent font-mono">›</span>
-                  <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && send()} placeholder="ask the brain…" className="bg-transparent flex-1 py-3 outline-none font-mono text-sm placeholder:text-muted-foreground" />
+                  <input
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && send()}
+                    placeholder="ask the brain…"
+                    disabled={isLLMLoading}
+                    className="bg-transparent flex-1 py-3 outline-none font-mono text-sm placeholder:text-muted-foreground disabled:opacity-50"
+                  />
                   <span className="w-1.5 h-4 bg-accent animate-blink" />
                 </div>
-                <button onClick={send} className="px-4 rounded-lg bg-primary/20 border border-primary/40 hover:bg-primary/30 text-primary"><Send className="w-4 h-4" /></button>
+                <button onClick={send} disabled={isLLMLoading} className="px-4 rounded-lg bg-primary/20 border border-primary/40 hover:bg-primary/30 text-primary disabled:opacity-50">
+                  <Send className="w-4 h-4" />
+                </button>
               </div>
             </div>
           </div>
@@ -160,7 +182,7 @@ export const LinguisticBrain = () => {
   );
 };
 
-const Helix = ({ unzipped }: { unzipped: boolean }) => {
+const Helix = ({ unzipped, movies }: { unzipped: boolean; movies: { title: string }[] }) => {
   const N = 18;
   return (
     <div className="relative w-full h-[340px] [perspective:900px] flex items-center justify-center">
@@ -186,7 +208,7 @@ const Helix = ({ unzipped }: { unzipped: boolean }) => {
                 <div className="absolute h-px bg-foreground/20" style={{ left: `${Math.min(x1, x2)}px`, width: `${Math.abs(x1 - x2)}px`, transform: `translateZ(${(z1 + z2) / 2}px)` }} />
               )}
               {unzipped && i % 3 === 0 && (
-                <div className="absolute font-mono text-[9px] text-muted-foreground whitespace-nowrap" style={{ transform: `translate3d(${x1 - 70}px, -6px, ${z1}px)` }}>{movie.title}</div>
+                <div className="absolute font-mono text-[9px] text-muted-foreground whitespace-nowrap" style={{ transform: `translate3d(${x1 - 70}px, -6px, ${z1}px)` }}>{movie?.title}</div>
               )}
             </div>
           );
@@ -211,12 +233,12 @@ const SentimentArc = ({ segs }: { segs: { label: string; val: number; color: str
   );
 };
 
-const DriftChart = () => {
+const DriftChart = ({ points }: { points: { year: number; mood: string; value: number }[] }) => {
   const w = 800, h = 160, pad = 30;
-  const max = Math.max(...driftPoints.map(p => p.value));
-  const xs = (i: number) => pad + (i / (driftPoints.length - 1)) * (w - pad * 2);
+  const max = Math.max(...points.map((p) => p.value), 0.01);
+  const xs = (i: number) => pad + (i / Math.max(points.length - 1, 1)) * (w - pad * 2);
   const ys = (v: number) => h - pad - (v / max) * (h - pad * 2);
-  const path = driftPoints.map((p, i) => `${i === 0 ? "M" : "L"} ${xs(i)} ${ys(p.value)}`).join(" ");
+  const path = points.map((p, i) => `${i === 0 ? "M" : "L"} ${xs(i)} ${ys(p.value)}`).join(" ");
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="w-full mt-4">
       <defs>
@@ -225,9 +247,9 @@ const DriftChart = () => {
           <stop offset="100%" stopColor="hsl(var(--neon))" stopOpacity="0" />
         </linearGradient>
       </defs>
-      <path d={`${path} L ${xs(driftPoints.length - 1)} ${h - pad} L ${xs(0)} ${h - pad} Z`} fill="url(#dr)" />
+      <path d={`${path} L ${xs(points.length - 1)} ${h - pad} L ${xs(0)} ${h - pad} Z`} fill="url(#dr)" />
       <path d={path} fill="none" stroke="hsl(var(--neon))" strokeWidth="2" />
-      {driftPoints.map((p, i) => (
+      {points.map((p, i) => (
         <g key={p.year}>
           <circle cx={xs(i)} cy={ys(p.value)} r="4" fill="hsl(var(--neon))" />
           <text x={xs(i)} y={h - 6} textAnchor="middle" className="font-mono fill-muted-foreground" fontSize="9">{p.year}</text>

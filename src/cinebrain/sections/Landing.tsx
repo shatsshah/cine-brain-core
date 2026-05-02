@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Particles } from "../components/Particles";
-import { Upload, Power } from "lucide-react";
+import { Upload, Power, Loader2 } from "lucide-react";
+import { useCineBrainStore } from "../store";
 
 const LINE1 = "Streaming apps sell your data.";
 const LINE2 = "We secure your vibe.";
@@ -9,6 +10,14 @@ export const Landing = ({ onGhostToggle, ghost }: { onGhostToggle: (v: boolean) 
   const [t1, setT1] = useState("");
   const [t2, setT2] = useState("");
   const [showRest, setShowRest] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const ingestFile = useCineBrainStore((s) => s.ingestFile);
+  const setGhostMode = useCineBrainStore((s) => s.setGhostMode);
+  const isIngesting = useCineBrainStore((s) => s.isIngesting);
+  const ingestionProgress = useCineBrainStore((s) => s.ingestionProgress);
+  const hasIngested = useCineBrainStore((s) => s.hasIngested);
+  const fileCount = useCineBrainStore((s) => s.fileCount);
 
   useEffect(() => {
     let i = 0, j = 0;
@@ -26,6 +35,26 @@ export const Landing = ({ onGhostToggle, ghost }: { onGhostToggle: (v: boolean) 
     }, 55);
     return () => clearInterval(id1);
   }, []);
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Reset the input so the same file (or another) can be uploaded again
+    e.target.value = "";
+    await ingestFile(file);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+    await ingestFile(file);
+  };
+
+  const handleGhostToggle = (value: boolean) => {
+    onGhostToggle(value);
+    setGhostMode(value);
+  };
 
   return (
     <section className="relative min-h-screen overflow-hidden bg-background">
@@ -71,16 +100,54 @@ export const Landing = ({ onGhostToggle, ghost }: { onGhostToggle: (v: boolean) 
             <div className="relative group">
               <div className="absolute inset-0 rounded-full animate-pulse-ring border-2 border-primary/60" />
               <div className="absolute inset-0 rounded-full animate-pulse-ring [animation-delay:1.2s] border-2 border-accent/40" />
-              <button className="relative w-72 h-72 rounded-full bg-card/40 border-2 border-primary/50 backdrop-blur-md flex flex-col items-center justify-center gap-3 overflow-hidden hover:scale-[1.02] transition-transform">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv,.pdf,.json"
+                onChange={handleFileSelect}
+                className="hidden"
+                id="file-upload"
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                onDrop={handleDrop}
+                onDragOver={(e) => e.preventDefault()}
+                disabled={isIngesting}
+                className="relative w-72 h-72 rounded-full bg-card/40 border-2 border-primary/50 backdrop-blur-md flex flex-col items-center justify-center gap-3 overflow-hidden hover:scale-[1.02] transition-transform disabled:opacity-70"
+              >
                 <div className="absolute inset-0 overflow-hidden rounded-full">
                   <div className="absolute -inset-x-10 h-[2px] bg-gradient-to-r from-transparent via-accent to-transparent top-1/2 animate-sweep" />
                 </div>
-                <Upload className="w-9 h-9 text-primary" strokeWidth={1.5} />
-                <div className="px-6 text-center">
-                  <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-foreground/90">Drop your OTT export</div>
-                  <div className="mt-1 font-mono text-[9px] tracking-[0.2em] text-muted-foreground">Netflix · Prime · Mubi · Letterboxd · IMDb</div>
-                </div>
-                <div className="font-mono text-[9px] tracking-[0.18em] text-accent/80 mt-1">PARSED LOCALLY · NEVER LEAVES DEVICE</div>
+
+                {isIngesting ? (
+                  <>
+                    <Loader2 className="w-9 h-9 text-primary animate-spin" strokeWidth={1.5} />
+                    <div className="px-6 text-center">
+                      <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-foreground/90">PROCESSING...</div>
+                      <div className="mt-2 w-36 h-1.5 rounded-full bg-card/80 overflow-hidden">
+                        <div className="h-full rounded-full bg-gradient-to-r from-primary to-accent transition-all duration-300" style={{ width: `${ingestionProgress}%` }} />
+                      </div>
+                      <div className="mt-1 font-mono text-[9px] tracking-[0.2em] text-muted-foreground">{Math.round(ingestionProgress)}% SECURED</div>
+                    </div>
+                  </>
+                ) : hasIngested ? (
+                  <>
+                    <span className="text-3xl">✓</span>
+                    <div className="px-6 text-center">
+                      <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-accent">VAULT SECURED · {fileCount} {fileCount === 1 ? 'FILE' : 'FILES'}</div>
+                      <div className="mt-1 font-mono text-[9px] tracking-[0.2em] text-muted-foreground">Drop CSV + PDF to cross-reference</div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-9 h-9 text-primary" strokeWidth={1.5} />
+                    <div className="px-6 text-center">
+                      <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-foreground/90">Drop your OTT export</div>
+                      <div className="mt-1 font-mono text-[9px] tracking-[0.2em] text-muted-foreground">Netflix · Prime · Mubi · Letterboxd · IMDb</div>
+                    </div>
+                    <div className="font-mono text-[9px] tracking-[0.18em] text-accent/80 mt-1">PARSED LOCALLY · NEVER LEAVES DEVICE</div>
+                  </>
+                )}
               </button>
             </div>
 
@@ -88,7 +155,7 @@ export const Landing = ({ onGhostToggle, ghost }: { onGhostToggle: (v: boolean) 
             <div className="flex flex-col items-center gap-3">
               <span className="label-mono">{ghost ? "Ghost Mode" : "Standard Mode"}</span>
               <button
-                onClick={() => onGhostToggle(!ghost)}
+                onClick={() => handleGhostToggle(!ghost)}
                 aria-label="Toggle Ghost Mode"
                 className={`relative w-20 h-36 rounded-2xl border-2 flex items-start justify-center pt-3 transition-all ${
                   ghost ? "border-cyan-400/60 bg-[hsl(var(--phantom))]" : "border-primary/60 bg-card/60"
