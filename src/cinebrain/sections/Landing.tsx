@@ -12,7 +12,7 @@ export const Landing = ({ onGhostToggle, ghost }: { onGhostToggle: (v: boolean) 
   const [showRest, setShowRest] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const ingestFile = useCineBrainStore((s) => s.ingestFile);
+  const ingestBatch = useCineBrainStore((s) => s.ingestBatch);
   const setGhostMode = useCineBrainStore((s) => s.setGhostMode);
   const isIngesting = useCineBrainStore((s) => s.isIngesting);
   const ingestionProgress = useCineBrainStore((s) => s.ingestionProgress);
@@ -37,18 +37,33 @@ export const Landing = ({ onGhostToggle, ghost }: { onGhostToggle: (v: boolean) 
   }, []);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    // Reset the input so the same file (or another) can be uploaded again
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
     e.target.value = "";
-    await ingestFile(file);
+    
+    const hasCSV = files.some(f => f.name.toLowerCase().endsWith(".csv"));
+    const hasPDF = files.some(f => f.name.toLowerCase().endsWith(".pdf"));
+    
+    if (hasCSV && hasPDF) {
+      await ingestBatch(files);
+    } else {
+      alert("Please select BOTH your watch history CSV and liked/disliked PDF simultaneously.");
+    }
   };
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
-    const file = e.dataTransfer.files?.[0];
-    if (!file) return;
-    await ingestFile(file);
+    const files = Array.from(e.dataTransfer.files || []);
+    if (files.length === 0) return;
+    
+    const hasCSV = files.some(f => f.name.toLowerCase().endsWith(".csv"));
+    const hasPDF = files.some(f => f.name.toLowerCase().endsWith(".pdf"));
+    
+    if (hasCSV && hasPDF) {
+      await ingestBatch(files);
+    } else {
+      alert("Please drop BOTH your watch history CSV and liked/disliked PDF simultaneously.");
+    }
   };
 
   const handleGhostToggle = (value: boolean) => {
@@ -103,6 +118,7 @@ export const Landing = ({ onGhostToggle, ghost }: { onGhostToggle: (v: boolean) 
               <input
                 ref={fileInputRef}
                 type="file"
+                multiple
                 accept=".csv,.pdf,.json"
                 onChange={handleFileSelect}
                 className="hidden"
@@ -142,10 +158,10 @@ export const Landing = ({ onGhostToggle, ghost }: { onGhostToggle: (v: boolean) 
                   <>
                     <Upload className="w-9 h-9 text-primary" strokeWidth={1.5} />
                     <div className="px-6 text-center">
-                      <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-foreground/90">Drop your OTT export</div>
-                      <div className="mt-1 font-mono text-[9px] tracking-[0.2em] text-muted-foreground">Netflix · Prime · Mubi · Letterboxd · IMDb</div>
+                      <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-foreground/90">Drop CSV + PDF</div>
+                      <div className="mt-1 font-mono text-[9px] tracking-[0.2em] text-muted-foreground">Select BOTH files simultaneously</div>
                     </div>
-                    <div className="font-mono text-[9px] tracking-[0.18em] text-accent/80 mt-1">PARSED LOCALLY · NEVER LEAVES DEVICE</div>
+                    <div className="font-mono text-[9px] tracking-[0.18em] text-accent/80 mt-1">SYNCHRONOUS MULTIMODAL INGESTION</div>
                   </>
                 )}
               </button>

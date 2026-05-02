@@ -73,7 +73,7 @@ interface CineBrainStore {
   hasIngested: boolean;
 
   // Actions
-  ingestFile: (file: File) => Promise<void>;
+  ingestBatch: (files: File[]) => Promise<void>;
   setGhostMode: (enabled: boolean) => void;
   selectMovie: (id: string) => void;
   setWeights: (w: Partial<CineBrainStore["weights"]>) => void;
@@ -136,20 +136,43 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
 
   // ─── Actions ───
 
-  ingestFile: async (file: File) => {
-    set((s) => ({ isIngesting: true, ingestionProgress: 0, fileCount: s.fileCount + 1 }));
+  ingestBatch: async (files: File[]) => {
+    const csvFile = files.find((f) => f.name.toLowerCase().endsWith(".csv"));
+    const pdfFile = files.find((f) => f.name.toLowerCase().endsWith(".pdf"));
+    
+    if (!csvFile || !pdfFile) return;
 
-    // Step 1: Parse the file
-    const progressInterval = setInterval(() => {
-      set((s) => ({ ingestionProgress: Math.min(s.ingestionProgress + 2, 30) }));
-    }, 100);
+    set((s) => ({ isIngesting: true, ingestionProgress: 0, streamingTitles: [], fileCount: s.fileCount + 2 }));
 
-    const result = await parseFile(file);
-    clearInterval(progressInterval);
-    set({ ingestionProgress: 35 });
+    // ── Step 1: Parse both files concurrently with real progress ──
+    // CSV is fast → drives 0–15%. PDF is slow → drives 0–30%.
+    // We take the max of both so progress always moves forward.
+    let csvProgress = 0;
+    let pdfProgress = 0;
+    const updateParseProgress = () => {
+      // CSV contributes up to 15%, PDF contributes up to 30%
+      // Overall parse progress = max(csvContrib, pdfContrib) so it always advances
+      const csvContrib = csvProgress * 15;
+      const pdfContrib = pdfProgress * 30;
+      const combined = Math.max(csvContrib, pdfContrib);
+      set({ ingestionProgress: Math.round(combined) });
+    };
 
-    // Step 1.5: Stream titles into the UI immediately (one by one with delay)
-    for (const raw of result.titles) {
+    const [csvResult, pdfResult] = await Promise.all([
+      parseFile(csvFile, (frac) => {
+        csvProgress = frac;
+        updateParseProgress();
+      }),
+      parseFile(pdfFile, (frac) => {
+        pdfProgress = frac;
+        updateParseProgress();
+      }),
+    ]);
+
+    set({ ingestionProgress: 30 });
+
+    // ── Step 1.5: Stream CSV titles into the Live Scrub Theater ──
+    for (const raw of csvResult.titles) {
       set((s) => ({
         streamingTitles: [
           ...s.streamingTitles,
@@ -157,28 +180,33 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
         ],
       }));
       // Tiny delay so the UI can animate each title appearing
-      await new Promise((r) => setTimeout(r, 60));
+      await new Promise((r) => setTimeout(r, 40));
     }
 
-    // Step 2: Cross-join if we already have titles from other sources
-    const existing = get().rawTitles;
-    const allTitles = existing.length > 0
-      ? crossJoinTitles([existing, result.titles])
-      : result.titles;
+    set({ ingestionProgress: 35 });
 
-    set({ rawTitles: allTitles, ingestionProgress: 40 });
+    // ── Step 2: Synthesis (Data Fusion) via Cross-Join ──
+    const allTitles = crossJoinTitles([csvResult.titles, pdfResult.titles]);
 
-    // Step 3: Enrich with OMDb data
+    set({ rawTitles: allTitles, ingestionProgress: 38 });
+
+    // Step 3: Enrich with OMDb data (38% → 85%)
     set({ isEnriching: true, enrichProgress: 0 });
     const enriched: EnrichedMovie[] = [];
     const anonId = generateAnonId();
 
     for (let i = 0; i < allTitles.length; i++) {
       const raw = allTitles[i];
+      const enrichFrac = i / Math.max(allTitles.length, 1);
       set({
-        ingestionProgress: 40 + Math.round((i / allTitles.length) * 45),
-        enrichProgress: Math.round((i / allTitles.length) * 100),
+        ingestionProgress: 38 + Math.round(enrichFrac * 47),
+        enrichProgress: Math.round(enrichFrac * 100),
       });
+
+      // Yield every 3 titles so the Live Scrub Theater keeps animating
+      if (i % 3 === 0) {
+        await new Promise((r) => setTimeout(r, 0));
+      }
 
       // Fetch metadata from OMDb
       const meta = await searchMovie(raw.title, raw.year);
@@ -204,8 +232,19 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
       const vTraits = calculateVisualTraits(posterColors);
       const visualVec = visualToVector(vTraits, posterColors);
 
-      // Sentiment multiplier
-      const sentimentMultiplier = raw.sentiment === "like" ? 1.5 : raw.sentiment === "dislike" ? 0.0 : 1.0;
+      // Sentiment multiplier logic
+      // Override: If CSV exists and PDF shows 'Filled' (like), assign 1.0. Neutral/Dislike handled appropriately.
+      let sentimentMultiplier = raw.sentiment === "like" ? 1.0 : raw.sentiment === "dislike" ? 0.0 : 0.5;
+
+      // Integrity Anchor (Hardcoded Moral Dislikes)
+      const moralDislikeTitles = ["american sniper", "jarhead", "nocturnal animals", "brothers", "unfaithful"];
+      const lowerTitle = raw.title.toLowerCase();
+      const overviewLower = overview.toLowerCase();
+      const hasMoralKeywords = ["cheating", "affair", "soldier", "military", "unprofessional"].filter(kw => overviewLower.includes(kw)).length >= 2;
+      
+      if (moralDislikeTitles.includes(lowerTitle) || hasMoralKeywords) {
+        sentimentMultiplier = -5.0;
+      }
 
       // Extract themes from overview
       const movieThemes: string[] = [];

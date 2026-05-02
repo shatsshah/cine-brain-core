@@ -3,6 +3,10 @@
 import Papa from "papaparse";
 import type { RawTitle, FileFormat, IngestionResult } from "../types";
 
+// ─── Progress Callback Type ───
+/** Receives a 0..1 fraction indicating parse progress */
+export type ParseProgressFn = (fraction: number) => void;
+
 // ─── Format Detection ───
 
 function detectCSVFormat(headers: string[]): FileFormat {
@@ -14,7 +18,7 @@ function detectCSVFormat(headers: string[]): FileFormat {
   return "generic-csv";
 }
 
-// ─── CSV Parsing ───
+// ─── CSV Parsing (HistoryParser) ───
 
 export function parseCSV(text: string): IngestionResult {
   const result = Papa.parse(text, {
@@ -113,17 +117,29 @@ export function parseCSV(text: string): IngestionResult {
   };
 }
 
-// ─── PDF Parsing ───
+// ─── PDF Parsing (SentimentForensicEngine) ───
 
-export async function parsePDF(file: File): Promise<IngestionResult> {
+export async function parsePDF(
+  file: File,
+  onProgress?: ParseProgressFn
+): Promise<IngestionResult> {
   // Dynamic import of pdfjs-dist to avoid SSR issues
   const pdfjsLib = await import("pdfjs-dist");
 
   // Set worker source
   pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
+  onProgress?.(0.05);
+  // Yield so the UI can show the initial progress bump
+  await new Promise((r) => setTimeout(r, 0));
+
   const arrayBuffer = await file.arrayBuffer();
+  onProgress?.(0.1);
+  await new Promise((r) => setTimeout(r, 0));
+
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  onProgress?.(0.15);
+  await new Promise((r) => setTimeout(r, 0));
 
   const titles: RawTitle[] = [];
 
@@ -140,25 +156,27 @@ export async function parsePDF(file: File): Promise<IngestionResult> {
       .map((l: string) => l.trim())
       .filter((l: string) => l.length > 2);
 
-    for (const line of lines) {
+    for (let li = 0; li < lines.length; li++) {
+      const line = lines[li];
       // Look for Netflix PDF patterns: title followed by thumb indicator
-      // Patterns: "Title 👍", "Title 👎", "Title | ?", "Title"
+      // Filled = Like, Hollow = Dislike
       let sentiment: "like" | "dislike" | "neutral" = "neutral";
       let cleanTitle = line;
 
-      if (line.includes("👍") || line.includes("Liked") || line.includes("✓")) {
+      if (line.includes("👍") || line.includes("Liked") || line.includes("✓") || line.includes("Filled")) {
         sentiment = "like";
         cleanTitle = line
-          .replace(/👍|Liked|✓|\|/g, "")
+          .replace(/👍|Liked|✓|Filled|\|/gi, "")
           .trim();
       } else if (
         line.includes("👎") ||
         line.includes("Disliked") ||
-        line.includes("✗")
+        line.includes("✗") ||
+        line.includes("Hollow")
       ) {
         sentiment = "dislike";
         cleanTitle = line
-          .replace(/👎|Disliked|✗|\|/g, "")
+          .replace(/👎|Disliked|✗|Hollow|\|/gi, "")
           .trim();
       } else if (line.includes("| ?") || line.match(/\|\s*$/)) {
         // The "| ?" or trailing pipe indicates where thumb icons would be
@@ -186,8 +204,22 @@ export async function parsePDF(file: File): Promise<IngestionResult> {
         sentiment,
         source: "pdf",
       });
+
+      // Yield every 8 lines so the browser can paint animations
+      if (li % 8 === 0) {
+        await new Promise((r) => setTimeout(r, 0));
+      }
     }
+
+    // Report page progress (0.15 → 0.95 range spread across pages)
+    const pageFraction = 0.15 + (pageNum / pdf.numPages) * 0.8;
+    onProgress?.(pageFraction);
+
+    // Yield to the main thread after every page
+    await new Promise((r) => setTimeout(r, 0));
   }
+
+  onProgress?.(1.0);
 
   return {
     titles,
@@ -296,19 +328,27 @@ export function crossJoinTitles(sources: RawTitle[][]): RawTitle[] {
 
 // ─── Main Entry Point ───
 
-export async function ingestFile(file: File): Promise<IngestionResult> {
+export async function ingestFile(
+  file: File,
+  onProgress?: ParseProgressFn
+): Promise<IngestionResult> {
   const ext = file.name.split(".").pop()?.toLowerCase();
 
   if (ext === "pdf") {
-    return parsePDF(file);
+    return parsePDF(file, onProgress);
   }
 
   const text = await file.text();
+  onProgress?.(0.5);
 
   if (ext === "json") {
-    return parseJSON(text);
+    const result = parseJSON(text);
+    onProgress?.(1.0);
+    return result;
   }
 
   // Default: treat as CSV
-  return parseCSV(text);
+  const result = parseCSV(text);
+  onProgress?.(1.0);
+  return result;
 }
