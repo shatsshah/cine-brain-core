@@ -1,0 +1,228 @@
+import { Suspense, useMemo, useRef, useState } from "react";
+import { Canvas, useFrame } from "@react-three/fiber";
+import { OrbitControls } from "@react-three/drei";
+import * as THREE from "three";
+import { SectionHeader } from "../components/SectionHeader";
+import { movies, archetype, Movie } from "../data";
+import { Sparkles } from "lucide-react";
+
+export const TasteUniverse = () => {
+  const [selected, setSelected] = useState<Movie>(movies[0]);
+  const [weights, setWeights] = useState({ visual: 50, textual: 50, acoustic: 40, mystery: 70, dread: 60, pacing: 40 });
+  const [shake, setShake] = useState(0);
+
+  const ranked = useMemo(() => {
+    const wt = (m: Movie) =>
+      (m.visual * weights.visual + m.textual * weights.textual + m.acoustic * weights.acoustic) /
+      (weights.visual + weights.textual + weights.acoustic);
+    return [...movies].sort((a, b) => wt(b) - wt(a)).slice(0, 5).map(m => m.id);
+  }, [weights]);
+
+  const matchScore = useMemo(() => {
+    const total = weights.visual + weights.textual + weights.acoustic;
+    return Math.round((selected.visual * weights.visual + selected.textual * weights.textual + selected.acoustic * weights.acoustic) / total);
+  }, [selected, weights]);
+
+  return (
+    <section id="universe" className="relative px-6 md:px-12 py-24 bg-background overflow-hidden">
+      <div className="absolute inset-0 pointer-events-none" style={{
+        background: "radial-gradient(ellipse 60% 40% at 25% 30%, hsl(var(--neon)/0.15), transparent 70%), radial-gradient(ellipse 50% 50% at 80% 70%, hsl(var(--crimson)/0.1), transparent 70%), radial-gradient(ellipse 60% 60% at 60% 90%, hsl(var(--cyan)/0.08), transparent 70%)",
+      }} />
+      <div className="max-w-7xl mx-auto relative">
+        <SectionHeader kicker="Member 4 · Experience Engineer · Grand Finale" section="SECTION 05" title="The" emphasis="Taste Universe" />
+
+        <div className="grid lg:grid-cols-3 gap-6">
+          {/* Galaxy */}
+          <div className="panel lg:col-span-2 p-0 h-[560px] relative overflow-hidden">
+            <div className="absolute top-3 left-4 z-10 label-mono">3D Galaxy · drag to orbit · scroll to zoom</div>
+            <Canvas camera={{ position: [0, 0, 4.5], fov: 55 }} dpr={[1, 2]}>
+              <Suspense fallback={null}>
+                <ambientLight intensity={0.4} />
+                <pointLight position={[0, 0, 0]} intensity={2} color={"#f59e0b"} />
+                <Galaxy movies={movies} selected={selected.id} top5={ranked} onSelect={setSelected} shake={shake} />
+                <OrbitControls enablePan={false} minDistance={2} maxDistance={9} autoRotate autoRotateSpeed={0.4} />
+              </Suspense>
+            </Canvas>
+            <div className="absolute bottom-3 left-4 right-4 flex flex-wrap gap-3 text-xs">
+              <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full" style={{ background: "hsl(var(--amber))", boxShadow: "0 0 8px hsl(var(--amber))" }} /> Your taste profile</span>
+              <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-primary" /> Top match</span>
+              <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-400" /> Watched</span>
+              <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-foreground/40" /> Other films</span>
+            </div>
+          </div>
+
+          {/* Sidebar */}
+          <div className="space-y-4">
+            <div className="panel p-5">
+              <span className="label-mono">Identity</span>
+              <div className="mt-3 flex items-center gap-3">
+                <div className="w-14 h-14 rounded-md flex items-center justify-center text-2xl"
+                  style={{ background: `linear-gradient(135deg, ${selected.posterColors[0]}, ${selected.posterColors[4]})` }}>{selected.poster}</div>
+                <div>
+                  <div className="font-serif text-lg font-bold leading-tight" style={{ fontFamily: "'Playfair Display', serif" }}>{selected.title}</div>
+                  <div className="font-mono text-[11px] text-muted-foreground">{selected.year}</div>
+                </div>
+              </div>
+              <div className="mt-4 text-center">
+                <div className="font-serif text-5xl font-black text-gradient-neon" style={{ fontFamily: "'Playfair Display', serif" }}>{matchScore}%</div>
+                <div className="label-mono mt-1">Overall Match · updates live</div>
+              </div>
+            </div>
+
+            <div className="panel p-5">
+              <span className="label-mono">Transparency Core</span>
+              <div className="mt-3 space-y-3">
+                <Bar label="Visual Model" value={selected.visual} color="hsl(var(--cyan))" tags={["Neon palette","High contrast","Shadows"]} />
+                <Bar label="Textual Model" value={selected.textual} color="hsl(var(--neon))" tags={selected.themes.slice(0,3)} />
+                <Bar label="Acoustic Model" value={selected.acoustic} color="hsl(var(--crimson))" tags={["Synth-driven","High Sensory Chaos"]} />
+              </div>
+            </div>
+
+            <div className="panel p-5">
+              <span className="label-mono">Tweak Panel</span>
+              <div className="mt-3 space-y-2.5">
+                {([
+                  ["visual","Visual weight"],["textual","Textual weight"],["acoustic","Acoustic weight"],
+                  ["mystery","Mystery"],["dread","Dread"],["pacing","Pacing"],
+                ] as const).map(([k, l]) => (
+                  <div key={k} className="grid grid-cols-[110px_1fr_36px] items-center gap-2">
+                    <span className="text-xs text-foreground/80">{l}</span>
+                    <input type="range" min={0} max={100} value={(weights as any)[k]}
+                      onChange={e => setWeights(w => ({ ...w, [k]: +e.target.value }))}
+                      className="accent-primary w-full" />
+                    <span className="font-mono text-[11px] text-muted-foreground text-right">{(weights as any)[k]}</span>
+                  </div>
+                ))}
+              </div>
+              <button onClick={() => setShake(s => s + 1)} className="mt-4 w-full py-3 rounded-lg border border-primary/40 bg-primary/10 hover:bg-primary/20 font-mono text-xs tracking-[0.22em] text-primary">
+                RE-RANK MY GALAXY ↗
+              </button>
+            </div>
+          </div>
+
+          {/* Cinematic Mirror */}
+          <div className="panel panel-crimson lg:col-span-3 p-8 relative overflow-hidden" style={{ background: "linear-gradient(135deg, hsl(var(--phantom)) 0%, hsl(var(--card)) 100%)" }}>
+            <div className="absolute -right-20 -top-20 w-72 h-72 rounded-full" style={{ background: "radial-gradient(circle, hsl(var(--neon)/0.3), transparent 70%)" }} />
+            <div className="relative grid md:grid-cols-[1fr_auto] gap-8 items-center">
+              <div>
+                <span className="label-mono text-primary">Based on your multimodal profile · your archetype is</span>
+                <h3 className="mt-2 font-serif text-5xl md:text-6xl font-black" style={{ fontFamily: "'Playfair Display', serif" }}>
+                  The <em className="text-gradient-neon not-italic">{archetype.name.replace("The ", "")}</em>
+                </h3>
+                <p className="mt-4 text-foreground/80 max-w-2xl leading-relaxed">{archetype.blurb}</p>
+                <div className="mt-5 flex flex-wrap gap-2">
+                  {archetype.films.map(f => <span key={f} className="chip">{f}</span>)}
+                </div>
+              </div>
+              <div className="flex flex-col items-center justify-center">
+                <div className="w-32 h-32 rounded-2xl flex items-center justify-center text-6xl shadow-[var(--shadow-neon)]" style={{ background: "linear-gradient(135deg, hsl(var(--cyan)) 0%, hsl(var(--neon)) 100%)" }}>
+                  <Sparkles className="w-16 h-16 text-white" strokeWidth={1.5} />
+                </div>
+                <div className="mt-3 text-primary font-mono text-xs tracking-[0.22em]">CONFIDENCE · {archetype.confidence}%</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+};
+
+const Bar = ({ label, value, color, tags }: { label: string; value: number; color: string; tags: string[] }) => (
+  <div>
+    <div className="flex items-center justify-between text-xs"><span>{label}</span><span style={{ color }} className="font-mono">{value}%</span></div>
+    <div className="mt-1 h-1.5 rounded-full bg-card/80 overflow-hidden">
+      <div className="h-full rounded-full transition-[width] duration-700" style={{ width: `${value}%`, background: color, boxShadow: `0 0 10px ${color}` }} />
+    </div>
+    <div className="mt-1.5 flex flex-wrap gap-1">
+      {tags.map(t => <span key={t} className="text-[10px] font-mono text-muted-foreground border border-border rounded-full px-2 py-0.5">{t}</span>)}
+    </div>
+  </div>
+);
+
+const Galaxy = ({ movies, selected, top5, onSelect, shake }: {
+  movies: Movie[]; selected: string; top5: string[]; onSelect: (m: Movie) => void; shake: number;
+}) => {
+  const positions = useRef<Record<string, THREE.Vector3>>({});
+  useMemo(() => {
+    movies.forEach(m => { positions.current[m.id] = new THREE.Vector3(m.x * 2.2, m.y * 1.6, m.z * 1.2); });
+  }, [movies]);
+
+  // Re-rank shake: jitter targets
+  const targets = useMemo(() => {
+    const out: Record<string, THREE.Vector3> = {};
+    movies.forEach(m => {
+      const j = (Math.sin(shake * 7.7 + m.x * 11) * 0.25);
+      const k = (Math.cos(shake * 5.3 + m.y * 13) * 0.25);
+      out[m.id] = new THREE.Vector3(m.x * 2.2 + j, m.y * 1.6 + k, m.z * 1.2);
+    });
+    return out;
+  }, [movies, shake]);
+
+  return (
+    <group>
+      {/* Background stars */}
+      {Array.from({ length: 200 }).map((_, i) => (
+        <mesh key={i} position={[(Math.random() - 0.5) * 14, (Math.random() - 0.5) * 10, (Math.random() - 0.5) * 8 - 2]}>
+          <sphereGeometry args={[0.012, 6, 6]} />
+          <meshBasicMaterial color={Math.random() > 0.5 ? "#a855f7" : "#06b6d4"} />
+        </mesh>
+      ))}
+      {/* Sun */}
+      <Sun />
+      {/* Movie stars */}
+      {movies.map(m => (
+        <Star key={m.id} movie={m} target={targets[m.id]} positions={positions} selected={selected === m.id} top5={top5.includes(m.id)} onSelect={onSelect} />
+      ))}
+    </group>
+  );
+};
+
+const Sun = () => {
+  const ref = useRef<THREE.Mesh>(null!);
+  useFrame(({ clock }) => { if (ref.current) ref.current.rotation.y = clock.elapsedTime * 0.2; });
+  return (
+    <group>
+      <mesh ref={ref}>
+        <sphereGeometry args={[0.18, 32, 32]} />
+        <meshStandardMaterial color="#f59e0b" emissive="#f59e0b" emissiveIntensity={2} />
+      </mesh>
+      <mesh>
+        <sphereGeometry args={[0.32, 32, 32]} />
+        <meshBasicMaterial color="#f59e0b" transparent opacity={0.18} />
+      </mesh>
+    </group>
+  );
+};
+
+const Star = ({ movie, target, positions, selected, top5, onSelect }: any) => {
+  const ref = useRef<THREE.Mesh>(null!);
+  const ringRef = useRef<THREE.Mesh>(null!);
+  useFrame(({ clock }) => {
+    if (!ref.current) return;
+    const cur = positions.current[movie.id];
+    cur.lerp(target, 0.04);
+    ref.current.position.copy(cur);
+    if (ringRef.current) {
+      ringRef.current.position.copy(cur);
+      const s = 1 + Math.sin(clock.elapsedTime * 2 + movie.x * 7) * 0.4;
+      ringRef.current.scale.setScalar(s);
+      (ringRef.current.material as THREE.MeshBasicMaterial).opacity = 0.4 - (s - 1);
+    }
+  });
+  const color = top5 ? "#a855f7" : movie.watched ? "#34d399" : "#cbd5e1";
+  return (
+    <group>
+      <mesh ref={ref} onClick={() => onSelect(movie)} onPointerOver={(e) => { e.stopPropagation(); document.body.style.cursor = "pointer"; }} onPointerOut={() => { document.body.style.cursor = "default"; }}>
+        <sphereGeometry args={[selected ? 0.085 : top5 ? 0.07 : 0.045, 16, 16]} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={selected ? 2.5 : top5 ? 1.6 : 0.6} />
+      </mesh>
+      {top5 && (
+        <mesh ref={ringRef}>
+          <ringGeometry args={[0.08, 0.1, 32]} />
+          <meshBasicMaterial color="#a855f7" transparent opacity={0.4} side={THREE.DoubleSide} />
+        </mesh>
+      )}
+    </group>
+  );
+};
