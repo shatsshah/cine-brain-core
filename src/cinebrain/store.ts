@@ -144,18 +144,19 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
 
     set((s) => ({ isIngesting: true, ingestionProgress: 0, streamingTitles: [], fileCount: s.fileCount + 2 }));
 
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 1: THE SCRUB (0% → 100%)
+    // Only CSV + PDF parsing + title streaming. NO API calls.
+    // ═══════════════════════════════════════════════════════════════
+
     // ── Step 1: Parse both files concurrently with real progress ──
-    // CSV is fast → drives 0–15%. PDF is slow → drives 0–30%.
-    // We take the max of both so progress always moves forward.
     let csvProgress = 0;
     let pdfProgress = 0;
     const updateParseProgress = () => {
-      // CSV contributes up to 15%, PDF contributes up to 30%
-      // Overall parse progress = max(csvContrib, pdfContrib) so it always advances
-      const csvContrib = csvProgress * 15;
-      const pdfContrib = pdfProgress * 30;
-      const combined = Math.max(csvContrib, pdfContrib);
-      set({ ingestionProgress: Math.round(combined) });
+      // CSV drives up to 25%, PDF drives up to 50% — we take the max
+      const csvContrib = csvProgress * 25;
+      const pdfContrib = pdfProgress * 50;
+      set({ ingestionProgress: Math.round(Math.max(csvContrib, pdfContrib)) });
     };
 
     const [csvResult, pdfResult] = await Promise.all([
@@ -169,84 +170,109 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
       }),
     ]);
 
-    set({ ingestionProgress: 30 });
+    set({ ingestionProgress: 50 });
+    // Yield so the 50% paints
+    await new Promise((r) => setTimeout(r, 0));
 
-    // ── Step 1.5: Stream CSV titles into the Live Scrub Theater ──
+    // ── Step 2: Stream CSV titles into the Live Scrub Theater (50→80%) ──
+    const totalTitles = csvResult.titles.length + pdfResult.titles.length;
+    let streamed = 0;
     for (const raw of csvResult.titles) {
       set((s) => ({
+        ingestionProgress: 50 + Math.round((streamed / Math.max(totalTitles, 1)) * 30),
         streamingTitles: [
           ...s.streamingTitles,
           { title: raw.title, status: "incoming" as const },
         ],
       }));
-      // Tiny delay so the UI can animate each title appearing
-      await new Promise((r) => setTimeout(r, 40));
+      streamed++;
+      // Yield so the animation paints every title
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    // Also stream PDF-only titles
+    for (const raw of pdfResult.titles) {
+      if (!csvResult.titles.some((c) => c.title.toLowerCase() === raw.title.toLowerCase())) {
+        set((s) => ({
+          ingestionProgress: 50 + Math.round((streamed / Math.max(totalTitles, 1)) * 30),
+          streamingTitles: [
+            ...s.streamingTitles,
+            { title: raw.title, status: "incoming" as const },
+          ],
+        }));
+        streamed++;
+        await new Promise((r) => setTimeout(r, 20));
+      }
     }
 
-    set({ ingestionProgress: 35 });
+    set({ ingestionProgress: 80 });
 
-    // ── Step 2: Synthesis (Data Fusion) via Cross-Join ──
+    // ── Step 3: Synthesis (Data Fusion) via Cross-Join (80→90%) ──
     const allTitles = crossJoinTitles([csvResult.titles, pdfResult.titles]);
+    set({ rawTitles: allTitles, ingestionProgress: 90 });
+    await new Promise((r) => setTimeout(r, 0));
 
-    set({ rawTitles: allTitles, ingestionProgress: 38 });
+    // ── Step 4: Integrity Anchor (Post-Synthesis Override) (90→95%) ──
+    const moralDislikeTitles = ["american sniper", "jarhead", "nocturnal animals", "brothers", "unfaithful"];
+    const moralKeywords = ["cheating", "affair", "soldier", "military", "unprofessional", "defense"];
+    for (const title of allTitles) {
+      const lower = title.title.toLowerCase();
+      if (moralDislikeTitles.includes(lower)) {
+        title.sentiment = "dislike";
+      }
+    }
+    set({ ingestionProgress: 95 });
 
-    // Step 3: Enrich with OMDb data (38% → 85%)
-    set({ isEnriching: true, enrichProgress: 0 });
-    const enriched: EnrichedMovie[] = [];
+    // ── Build Audit Receipt ──
     const anonId = generateAnonId();
+    const audit = await buildAuditReceipt(allTitles.length, anonId);
+
+    // ══════════════════════════════════════════════════
+    // SCRUB COMPLETE → 100% SECURED
+    // ══════════════════════════════════════════════════
+    set({
+      ingestionProgress: 100,
+      isIngesting: false,
+      hasIngested: true,
+      audit,
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 2: BACKGROUND ENRICHMENT (runs after scrub is SECURED)
+    // ═══════════════════════════════════════════════════════════════
+    set({ isEnriching: true, enrichProgress: 0 });
+
+    const enriched: EnrichedMovie[] = [];
 
     for (let i = 0; i < allTitles.length; i++) {
       const raw = allTitles[i];
       const enrichFrac = i / Math.max(allTitles.length, 1);
-      set({
-        ingestionProgress: 38 + Math.round(enrichFrac * 47),
-        enrichProgress: Math.round(enrichFrac * 100),
-      });
+      set({ enrichProgress: Math.round(enrichFrac * 100) });
 
-      // Yield every 3 titles so the Live Scrub Theater keeps animating
-      if (i % 3 === 0) {
-        await new Promise((r) => setTimeout(r, 0));
-      }
+      await new Promise((r) => setTimeout(r, 0));
 
-      // Fetch metadata from OMDb
       const meta = await searchMovie(raw.title, raw.year);
-
       const genres = meta?.genres || ["Drama"];
       const genre = genres[0] || "Drama";
       const overview = meta?.overview || "";
       const posterUrl = meta?.posterUrl || null;
 
-      // Extract poster colors
       let posterColors = ["#1a1a2e", "#a855f7", "#06b6d4", "#0f2035", "#cf6b3a"];
-      if (posterUrl) {
-        try {
-          posterColors = await extractColorsFromUrl(posterUrl);
-        } catch { /* use defaults */ }
-      }
+      if (posterUrl) { try { posterColors = await extractColorsFromUrl(posterUrl); } catch {} }
 
-      // Build acoustic profile
       const acousticProf = buildAcousticProfile(genre, raw.title);
       const acousticVec = acousticToVector(acousticProf);
-
-      // Build visual vector
       const vTraits = calculateVisualTraits(posterColors);
       const visualVec = visualToVector(vTraits, posterColors);
 
-      // Sentiment multiplier logic
-      // Override: If CSV exists and PDF shows 'Filled' (like), assign 1.0. Neutral/Dislike handled appropriately.
       let sentimentMultiplier = raw.sentiment === "like" ? 1.0 : raw.sentiment === "dislike" ? 0.0 : 0.5;
-
-      // Integrity Anchor (Hardcoded Moral Dislikes)
-      const moralDislikeTitles = ["american sniper", "jarhead", "nocturnal animals", "brothers", "unfaithful"];
       const lowerTitle = raw.title.toLowerCase();
       const overviewLower = overview.toLowerCase();
-      const hasMoralKeywords = ["cheating", "affair", "soldier", "military", "unprofessional"].filter(kw => overviewLower.includes(kw)).length >= 2;
+      const hasMoralKeywords = moralKeywords.filter(kw => overviewLower.includes(kw)).length >= 2;
       
       if (moralDislikeTitles.includes(lowerTitle) || hasMoralKeywords) {
         sentimentMultiplier = -5.0;
       }
 
-      // Extract themes from overview
       const movieThemes: string[] = [];
       const themeKws: Record<string, string[]> = {
         Isolation: ["alone", "lonely", "isolated"], Identity: ["identity", "self", "who"],
@@ -255,119 +281,57 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
         Redemption: ["redemption", "forgive"], Betrayal: ["betray", "traitor"],
         Chaos: ["chaos", "destruction"], Sacrifice: ["sacrifice", "hero"],
       };
-      const overLower = overview.toLowerCase();
       for (const [theme, kws] of Object.entries(themeKws)) {
-        if (kws.some((kw) => overLower.includes(kw))) movieThemes.push(theme);
+        if (kws.some((kw) => overviewLower.includes(kw))) movieThemes.push(theme);
       }
       if (movieThemes.length === 0) movieThemes.push("Ambiguous");
 
-      // Apply negative seeds
       const penalty = applyNegativeSeeds(overview, genres);
-
-      // Scores
       const visual = Math.max(0, Math.min(100, Math.round(vTraits.darkness * 40 + vTraits.contrast * 30 + vTraits.saturation * 30)));
       const textual = Math.max(0, Math.min(100, Math.round(movieThemes.length * 15 + (meta?.imdbRating || 5) * 6)));
       const acoustic = Math.max(0, Math.min(100, acousticProf.sonicDensity));
 
-      // Build evidence tags
-      const evidence = [
-        ...posterColors.slice(0, 1).map(() => "Neon palette"),
-        "High contrast",
-        ...movieThemes.slice(0, 2),
-        acousticProf.soundscapeType,
-        acousticProf.sonicDensity > 60 ? "High Sensory Chaos" : "Low Audio Stimuli",
-      ];
-
+      const evidence = ["Neon palette", "High contrast", ...movieThemes.slice(0, 2), acousticProf.soundscapeType];
       const id = (meta?.imdbId || raw.title.toLowerCase().replace(/[^a-z0-9]/g, "")).slice(0, 20);
 
       enriched.push({
-        id,
-        tmdbId: undefined,
-        title: meta?.title || raw.title,
-        year: meta?.year || raw.year || 2020,
-        genre,
-        genres,
-        themes: movieThemes,
-        overview,
-        posterUrl,
-        posterColors,
-        visual: Math.max(0, visual + penalty),
-        textual: Math.max(0, textual + penalty),
-        acoustic,
-        match: 0, // calculated after fusion
-        watched: true,
-        sentiment: raw.sentiment || "neutral",
-        sentimentMultiplier,
-        evidence,
-        x: 0, y: 0, z: 0,
-        visualVector: visualVec,
-        textualVector: [], // filled in NLP pass
-        acousticVector: acousticVec,
-        fusedVector: [],
+        id, tmdbId: undefined, title: meta?.title || raw.title, year: meta?.year || raw.year || 2020, genre, genres, themes: movieThemes,
+        overview, posterUrl, posterColors, visual: Math.max(0, visual + penalty), textual: Math.max(0, textual + penalty),
+        acoustic, match: 0, watched: true, sentiment: raw.sentiment || "neutral", sentimentMultiplier,
+        evidence, x: 0, y: 0, z: 0, visualVector: visualVec, textualVector: [], acousticVector: acousticVec, fusedVector: [],
       });
+
+      if (i % 5 === 0 || i === allTitles.length - 1) set({ movies: [...enriched] });
     }
 
-    set({ ingestionProgress: 85 });
-
-    // Step 4: NLP pass — extract themes, paradoxes, sentiment, drift
-    const themeWeights = extractThemes(enriched.map((m) => ({
-      overview: m.overview, genres: m.genres, sentiment: m.sentiment, sentimentMultiplier: m.sentimentMultiplier,
-    })));
-
-    const paradoxCards = detectParadoxes(enriched.map((m) => ({
-      genres: m.genres, themes: m.themes, sentiment: m.sentiment,
-    })));
-
+    const themeWeights = extractThemes(enriched.map((m) => ({ overview: m.overview, genres: m.genres, sentiment: m.sentiment, sentimentMultiplier: m.sentimentMultiplier })));
+    const paradoxCards = detectParadoxes(enriched.map((m) => ({ genres: m.genres, themes: m.themes, sentiment: m.sentiment })));
     const sentimentSegments = calculateSentiment(enriched.map((m) => ({ genres: m.genres })));
+    const driftPoints = calculateDrift(enriched.map((m) => ({ watchDate: allTitles.find((r) => r.title.toLowerCase() === m.title.toLowerCase())?.watchDate, genres: m.genres, sentiment: m.sentiment })));
 
-    const driftPoints = calculateDrift(enriched.map((m) => ({
-      watchDate: get().rawTitles.find((r) => r.title.toLowerCase() === m.title.toLowerCase())?.watchDate,
-      genres: m.genres, sentiment: m.sentiment,
-    })));
-
-    // Build textual vectors
     const textualVecBase = nlpToVector(themeWeights, sentimentSegments, paradoxCards.length);
-    for (const movie of enriched) {
-      movie.textualVector = textualVecBase; // shared base, could be per-movie in future
-    }
+    for (const movie of enriched) movie.textualVector = textualVecBase;
 
-    set({ ingestionProgress: 90 });
-
-    // Step 5: Fusion pass
     const allVisualTraits = enriched.map((m) => calculateVisualTraits(m.posterColors));
     const aggTraits = aggregateVisualTraits(allVisualTraits);
-    const aggPalette = enriched.length > 0
-      ? enriched.slice(0, 5).flatMap((m) => m.posterColors.slice(0, 1)).slice(0, 5)
-      : fallbackPalette;
+    const aggPalette = enriched.length > 0 ? enriched.slice(0, 5).flatMap((m) => m.posterColors.slice(0, 1)).slice(0, 5) : fallbackPalette;
     const aggPaletteNames = aggPalette.map(namePaletteColor);
-
-    // Aggregate acoustic
     const allAcousticProfiles = enriched.map((m) => buildAcousticProfile(m.genre, m.title));
     const aggAcoustic = aggregateAcousticProfiles(allAcousticProfiles);
 
-    // Build user fused vector (average of all movie vectors)
-    for (const movie of enriched) {
-      movie.fusedVector = fuseVectors(movie.visualVector, movie.textualVector, movie.acousticVector);
-    }
+    for (const movie of enriched) movie.fusedVector = fuseVectors(movie.visualVector, movie.textualVector, movie.acousticVector);
 
     const userVector = Array(128).fill(0);
     let likedCount = 0;
     for (const movie of enriched) {
       if (movie.sentiment !== "dislike") {
-        for (let d = 0; d < 128; d++) {
-          userVector[d] += (movie.fusedVector[d] || 0) * movie.sentimentMultiplier;
-        }
+        for (let d = 0; d < 128; d++) userVector[d] += (movie.fusedVector[d] || 0) * movie.sentimentMultiplier;
         likedCount++;
       }
     }
-    if (likedCount > 0) {
-      for (let d = 0; d < 128; d++) userVector[d] /= likedCount;
-    }
+    if (likedCount > 0) for (let d = 0; d < 128; d++) userVector[d] /= likedCount;
 
-    // Add differential privacy noise
     const noisyVector = addLaplaceNoise(userVector, 2.0, 0.5);
-
-    // Calculate match scores and galaxy positions
     const weights = get().weights;
     const positions = projectToGalaxy(enriched.map((m) => ({ id: m.id, fusedVector: m.fusedVector, genre: m.genre })));
     for (const movie of enriched) {
@@ -375,38 +339,16 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
       const pos = positions[movie.id];
       if (pos) { movie.x = pos.x; movie.y = pos.y; movie.z = pos.z; }
     }
-
-    // Sort by match score
     enriched.sort((a, b) => b.match - a.match);
-
-    // Archetype
     const archResult = matchArchetype(noisyVector);
 
-    // Audit
-    const audit = await buildAuditReceipt(allTitles.length, anonId);
-
     set({
-      movies: enriched,
-      isEnriching: false,
-      enrichProgress: 100,
-      ingestionProgress: 100,
-      isIngesting: false,
-      acousticProfile: aggAcoustic,
-      aggregatePalette: aggPalette.length >= 5 ? aggPalette : fallbackPalette,
-      paletteNames: aggPaletteNames.length >= 5 ? aggPaletteNames : fallbackPaletteNames,
-      visualTraits: aggTraits,
-      themeWeights: themeWeights.length > 0 ? themeWeights : fallbackThemes,
-      paradoxCards,
-      sentimentSegments,
-      driftPoints: driftPoints.length >= 2 ? driftPoints : fallbackDrift,
-      fusedVector: noisyVector,
-      archetype: archResult,
-      audit,
-      selectedMovieId: enriched[0]?.id || "",
-      hasIngested: true,
+      movies: enriched, isEnriching: false, enrichProgress: 100,
+      acousticProfile: aggAcoustic, aggregatePalette: aggPalette, paletteNames: aggPaletteNames,
+      visualTraits: aggTraits, themeWeights, paradoxCards, sentimentSegments, driftPoints,
+      fusedVector: noisyVector, archetype: archResult, selectedMovieId: enriched[0]?.id || "",
     });
 
-    // Ghost Mode: store in session map
     if (get().ghostMode) {
       ghostSessionMap.set("movies", enriched);
       ghostSessionMap.set("vector", noisyVector);
