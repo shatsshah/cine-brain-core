@@ -209,28 +209,44 @@ const LIGHT_TITLE_KEYWORDS = [
   "wonder", "joy", "dance", "sing", "chef", "cook", "garden",
 ];
 
-/** Calculate mood drift over time from watch history */
+/** Calculate mood drift over time from watch history.
+ *  Accepts an optional `movieYear` field so we can fall back to the movie's
+ *  release year when no watchDate is available (instead of assigning random years).
+ */
 export function calculateDrift(
-  movies: { watchDate?: string; genres: string[]; sentiment: string; title?: string }[]
+  movies: { watchDate?: string; genres: string[]; sentiment: string; title?: string; movieYear?: number }[]
 ): DriftPoint[] {
-  // Group by year
+  // Group by year — prefer watchDate, then movieYear, then current year
   const yearMap: Record<number, {
     sentimentSum: number; count: number; genres: string[];
-    intenseCount: number; lightCount: number;
+    intenseCount: number; lightCount: number; titles: string[];
   }> = {};
 
+  const currentYear = new Date().getFullYear();
+
   for (const movie of movies) {
-    let year: number;
+    let year: number | undefined;
+
+    // 1st priority: watchDate from CSV/PDF
     if (movie.watchDate) {
-      year = new Date(movie.watchDate).getFullYear();
-      if (isNaN(year) || year < 2015) year = 2023;
-    } else {
-      year = 2023 + Math.floor(Math.random() * 3);
+      const parsed = new Date(movie.watchDate).getFullYear();
+      if (!isNaN(parsed) && parsed >= 1990 && parsed <= currentYear + 1) {
+        year = parsed;
+      }
     }
 
-    if (!yearMap[year]) yearMap[year] = { sentimentSum: 0, count: 0, genres: [], intenseCount: 0, lightCount: 0 };
+    // 2nd priority: the movie's release year (from OMDb enrichment)
+    if (!year && movie.movieYear && movie.movieYear >= 1990 && movie.movieYear <= currentYear + 1) {
+      year = movie.movieYear;
+    }
+
+    // Last resort: current year (no randomization)
+    if (!year) year = currentYear;
+
+    if (!yearMap[year]) yearMap[year] = { sentimentSum: 0, count: 0, genres: [], intenseCount: 0, lightCount: 0, titles: [] };
     yearMap[year].count++;
     yearMap[year].genres.push(...movie.genres);
+    yearMap[year].titles.push(movie.title || "Unknown");
     yearMap[year].sentimentSum += movie.sentiment === "like" ? 0.7 : movie.sentiment === "dislike" ? 0.2 : 0.5;
 
     // Check title intensity
@@ -254,14 +270,8 @@ export function calculateDrift(
   ];
 
   const years = Object.keys(yearMap).map(Number).sort();
-  if (years.length === 0) {
-    return [
-      { year: 2022, mood: "Optimistic", value: 0.78 },
-      { year: 2023, mood: "Restless", value: 0.5 },
-      { year: 2024, mood: "Reflective", value: 0.34 },
-      { year: 2025, mood: "Cynical Noir", value: 0.22 },
-    ];
-  }
+  // If no movies at all, return empty — let the UI handle the "no data" state
+  if (years.length === 0) return [];
 
   return years.map((year) => {
     const data = yearMap[year];
@@ -281,6 +291,30 @@ export function calculateDrift(
     const mood = moodLabels.find(([threshold]) => value >= threshold)?.[1] || "Cosmic Dread";
     return { year, mood, value };
   });
+}
+
+/** Get the titles grouped by year (used by the LLM mood generator) */
+export function getYearGroupedTitles(
+  movies: { watchDate?: string; genres: string[]; title?: string; movieYear?: number }[]
+): Record<number, string[]> {
+  const yearMap: Record<number, string[]> = {};
+  const currentYear = new Date().getFullYear();
+
+  for (const movie of movies) {
+    let year: number | undefined;
+    if (movie.watchDate) {
+      const parsed = new Date(movie.watchDate).getFullYear();
+      if (!isNaN(parsed) && parsed >= 1990 && parsed <= currentYear + 1) year = parsed;
+    }
+    if (!year && movie.movieYear && movie.movieYear >= 1990 && movie.movieYear <= currentYear + 1) {
+      year = movie.movieYear;
+    }
+    if (!year) year = currentYear;
+
+    if (!yearMap[year]) yearMap[year] = [];
+    yearMap[year].push(movie.title || "Unknown");
+  }
+  return yearMap;
 }
 
 /** Convert NLP data to a 44-dim vector */

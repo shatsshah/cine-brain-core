@@ -5,7 +5,7 @@ import * as THREE from "three";
 import { SectionHeader } from "../components/SectionHeader";
 import { useCineBrainStore } from "../store";
 import type { EnrichedMovie } from "../types";
-import { Sparkles, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 export const TasteUniverse = () => {
   const movies = useCineBrainStore((s) => s.movies);
@@ -165,7 +165,7 @@ export const TasteUniverse = () => {
           {dataReady && (
             <div className="panel panel-crimson lg:col-span-3 p-8 relative overflow-hidden" style={{ background: "linear-gradient(135deg, hsl(var(--phantom)) 0%, hsl(var(--card)) 100%)" }}>
               <div className="absolute -right-20 -top-20 w-72 h-72 rounded-full" style={{ background: "radial-gradient(circle, hsl(var(--neon)/0.3), transparent 70%)" }} />
-              <div className="relative grid md:grid-cols-[1fr_auto] gap-8 items-center">
+              <div className="relative">
                 <div>
                   <span className="label-mono text-primary">Based on your multimodal profile · your archetype is</span>
                   <h3 className="mt-2 font-serif text-5xl md:text-6xl font-black" style={{ fontFamily: "'Playfair Display', serif" }}>
@@ -175,12 +175,6 @@ export const TasteUniverse = () => {
                   <div className="mt-5 flex flex-wrap gap-2">
                     {archetype.films.map((f) => <span key={f} className="chip">{f}</span>)}
                   </div>
-                </div>
-                <div className="flex flex-col items-center justify-center">
-                  <div className="w-32 h-32 rounded-2xl flex items-center justify-center text-6xl shadow-[var(--shadow-neon)]" style={{ background: "linear-gradient(135deg, hsl(var(--cyan)) 0%, hsl(var(--neon)) 100%)" }}>
-                    <Sparkles className="w-16 h-16 text-white" strokeWidth={1.5} />
-                  </div>
-                  <div className="mt-3 text-primary font-mono text-xs tracking-[0.22em]">CONFIDENCE · {archetype.confidence}%</div>
                 </div>
               </div>
             </div>

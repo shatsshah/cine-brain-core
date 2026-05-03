@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { SectionHeader } from "../components/SectionHeader";
 import { useCineBrainStore } from "../store";
 import { Send, AlertTriangle, Loader2, Shield } from "lucide-react";
@@ -116,6 +116,12 @@ export const LinguisticBrain = () => {
   const enrichProgress = useCineBrainStore((s) => s.enrichProgress);
 
   const [input, setInput] = useState("");
+  const convoEndRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to latest message when conversation updates
+  useEffect(() => {
+    convoEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [convo]);
 
   const paradox = useDynamicParadox();
 
@@ -250,7 +256,8 @@ export const LinguisticBrain = () => {
           </div>
 
           {/* Dialogue constellation */}
-          <div className="panel lg:col-span-2 p-6 relative overflow-hidden min-h-[420px]">
+          {/* Dialogue Constellation — overflow-visible so text is never clipped */}
+          <div className="panel lg:col-span-2 p-6 relative min-h-[420px]" style={{ overflow: 'visible' }}>
             <div className="absolute inset-0 pointer-events-none">
               {Array.from({ length: 60 }).map((_, i) => (
                 <div key={i} className="absolute rounded-full bg-foreground/40 animate-drift" style={{
@@ -265,14 +272,14 @@ export const LinguisticBrain = () => {
               <span className="label-mono">Dialogue Constellation</span>
               <p className="text-muted-foreground text-sm mt-1">Ask in the tone of your favorite films. The brain answers as a personified archetype.</p>
 
-              <div className="mt-5 space-y-4 max-h-[260px] overflow-y-auto pr-2">
+              <div className="mt-5 space-y-4 max-h-[60vh] overflow-y-auto pr-2" style={{ scrollBehavior: 'smooth' }}>
                 {convo.map((c, i) => (
-                  <div key={i} className="grid md:grid-cols-2 gap-3 animate-float-card" style={{ animationDelay: `${i * 0.4}s` }}>
-                    <div className="rounded-xl p-4 bg-card/60 border border-primary/30 font-mono text-sm">
+                  <div key={i} className="grid md:grid-cols-2 gap-3 animate-float-card transition-all duration-300" style={{ animationDelay: `${i * 0.4}s` }}>
+                    <div className="rounded-xl p-4 bg-card/60 border border-primary/30 font-mono text-sm break-words" style={{ overflowWrap: 'break-word', wordBreak: 'break-word', whiteSpace: 'pre-wrap', height: 'auto', minHeight: 'fit-content' }}>
                       <div className="label-mono mb-2 text-primary">YOU ASK</div>
                       <div className="text-foreground">{c.q}</div>
                     </div>
-                    <div className="rounded-xl p-4 bg-[hsl(var(--phantom))] border border-accent/30 font-mono text-sm">
+                    <div className="rounded-xl p-4 bg-[hsl(var(--phantom))] border border-accent/30 font-mono text-sm break-words transition-all duration-300" style={{ overflowWrap: 'break-word', wordBreak: 'break-word', whiteSpace: 'pre-wrap', height: 'auto', minHeight: 'fit-content' }}>
                       <div className="label-mono mb-2 text-accent">CINE-BRAIN · ARCHETYPE</div>
                       <div className="text-foreground/90 leading-relaxed">{c.a}</div>
                     </div>
@@ -284,6 +291,8 @@ export const LinguisticBrain = () => {
                     <span className="font-mono text-[11px] animate-blink">Brain is thinking...</span>
                   </div>
                 )}
+                {/* Scroll anchor — auto-scrolls to here on new messages */}
+                <div ref={convoEndRef} />
               </div>
 
               <div className="mt-5 flex gap-2">

@@ -12,8 +12,8 @@ import { parseCSV, parsePDF, crossJoinTitles } from "./engine/ingest";
 import { searchMovie } from "./engine/omdb";
 import { buildAcousticProfile, aggregateAcousticProfiles, acousticToVector } from "./engine/acoustic";
 import { extractColorsFromUrl, extractColorsFromFile, calculateVisualTraits, aggregateVisualTraits, matchInspirationColors, visualToVector, namePaletteColor } from "./engine/vision";
-import { extractThemes, detectParadoxes, calculateSentiment, calculateDrift, nlpToVector, applyNegativeSeeds } from "./engine/nlp";
-import { askCineBrain, getDominantGenre, generateDynamicArchetype } from "./engine/llm";
+import { extractThemes, detectParadoxes, calculateSentiment, calculateDrift, nlpToVector, applyNegativeSeeds, getYearGroupedTitles } from "./engine/nlp";
+import { askCineBrain, getDominantGenre, generateDynamicArchetype, generateDriftMoods } from "./engine/llm";
 import { fuseVectors, matchArchetype, calculateMatchScore, projectToGalaxy } from "./engine/fusion";
 import { generateAnonId, buildAuditReceipt, addLaplaceNoise, vaporize } from "./engine/privacy";
 
@@ -359,7 +359,7 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
         const partialThemeWeights = extractThemes(enriched.map((m) => ({ overview: m.overview, genres: m.genres, sentiment: m.sentiment, sentimentMultiplier: m.sentimentMultiplier })));
         const partialParadoxCards = detectParadoxes(enriched.map((m) => ({ genres: m.genres, themes: m.themes, sentiment: m.sentiment })));
         const partialSentiment = calculateSentiment(enriched.map((m) => ({ genres: m.genres })));
-        const partialDrift = calculateDrift(enriched.map((m) => ({ watchDate: allTitles.find((r) => r.title.toLowerCase() === m.title.toLowerCase())?.watchDate, genres: m.genres, sentiment: m.sentiment, title: m.title })));
+        const partialDrift = calculateDrift(enriched.map((m) => ({ watchDate: allTitles.find((r) => r.title.toLowerCase() === m.title.toLowerCase())?.watchDate, genres: m.genres, sentiment: m.sentiment, title: m.title, movieYear: m.year })));
         const partialPalette = enriched.slice(0, 5).flatMap((m) => m.posterColors.slice(0, 1)).slice(0, 5);
         const partialPaletteNames = partialPalette.map(namePaletteColor);
 
@@ -379,7 +379,7 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
     const themeWeights = extractThemes(enriched.map((m) => ({ overview: m.overview, genres: m.genres, sentiment: m.sentiment, sentimentMultiplier: m.sentimentMultiplier })));
     const paradoxCards = detectParadoxes(enriched.map((m) => ({ genres: m.genres, themes: m.themes, sentiment: m.sentiment })));
     const sentimentSegments = calculateSentiment(enriched.map((m) => ({ genres: m.genres })));
-    const driftPoints = calculateDrift(enriched.map((m) => ({ watchDate: allTitles.find((r) => r.title.toLowerCase() === m.title.toLowerCase())?.watchDate, genres: m.genres, sentiment: m.sentiment, title: m.title })));
+    const driftPoints = calculateDrift(enriched.map((m) => ({ watchDate: allTitles.find((r) => r.title.toLowerCase() === m.title.toLowerCase())?.watchDate, genres: m.genres, sentiment: m.sentiment, title: m.title, movieYear: m.year })));
 
     const textualVecBase = nlpToVector(themeWeights, sentimentSegments, paradoxCards.length);
     for (const movie of enriched) movie.textualVector = textualVecBase;
@@ -413,19 +413,19 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
     }
     enriched.sort((a, b) => b.match - a.match);
     const archResult = matchArchetype(noisyVector);
-    
+
     try {
       const allGenres = enriched.flatMap((m) => m.genres);
       const genreCounts: Record<string, number> = {};
       for (const g of allGenres) genreCounts[g] = (genreCounts[g] || 0) + 1;
       const topGenres = Object.entries(genreCounts).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([g]) => g);
 
-      const dynamicArch = await generateDynamicArchetype({ 
-        themes: themeWeights.slice(0, 5).map(t => t.name), 
-        topGenres, 
-        sentimentSegments 
+      const dynamicArch = await generateDynamicArchetype({
+        themes: themeWeights.slice(0, 5).map(t => t.name),
+        topGenres,
+        sentimentSegments
       });
-      
+
       if (dynamicArch) {
         archResult.name = dynamicArch.name;
         archResult.blurb = dynamicArch.blurb;
@@ -441,6 +441,33 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
       fusedVector: noisyVector, archetype: archResult, selectedMovieId: enriched[0]?.id || "",
       sessionId: s.sessionId + 1,
     }));
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 3: LLM MOOD ENRICHMENT (runs AFTER enrichment is 100%)
+    // Calls the LLM to generate aesthetic mood labels for each year.
+    // This is decoupled from scrub + enrichment — purely cosmetic.
+    // ═══════════════════════════════════════════════════════════════
+    try {
+      const yearTitles = getYearGroupedTitles(
+        enriched.map((m) => ({
+          watchDate: allTitles.find((r) => r.title.toLowerCase() === m.title.toLowerCase())?.watchDate,
+          genres: m.genres,
+          title: m.title,
+          movieYear: m.year,
+        }))
+      );
+      const llmMoods = await generateDriftMoods(yearTitles);
+      if (llmMoods && Object.keys(llmMoods).length > 0) {
+        // Merge LLM moods into existing drift points
+        const updatedDrift = driftPoints.map((dp) => ({
+          ...dp,
+          mood: llmMoods[dp.year] || dp.mood, // LLM mood overrides heuristic
+        }));
+        set({ driftPoints: updatedDrift });
+      }
+    } catch (err) {
+      console.warn("[Drift] LLM mood enrichment failed, heuristic moods preserved:", err);
+    }
 
     // ── Re-trigger inspiration matching if colors were previously uploaded ──
     const existingColors = get().inspirationColors;
