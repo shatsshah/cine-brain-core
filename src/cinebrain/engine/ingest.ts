@@ -123,84 +123,84 @@ export async function parsePDF(
   file: File,
   onProgress?: ParseProgressFn
 ): Promise<IngestionResult> {
-  // Dynamic import of pdfjs-dist to avoid SSR issues
-  const pdfjsLib = await import("pdfjs-dist");
-
-  // Set worker source
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-
   onProgress?.(0.05);
-  // Yield so the UI can show the initial progress bump
   await new Promise((r) => setTimeout(r, 0));
 
   const arrayBuffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer);
+
   onProgress?.(0.1);
   await new Promise((r) => setTimeout(r, 0));
 
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-  onProgress?.(0.15);
+  // Convert bytes to string for regex parsing
+  // PDF text streams are stored as BT...ET blocks
+  let raw = "";
+  for (let i = 0; i < bytes.length; i++) {
+    raw += String.fromCharCode(bytes[i]);
+  }
+
+  onProgress?.(0.2);
   await new Promise((r) => setTimeout(r, 0));
 
+  // Extract all text from BT (Begin Text) ... ET (End Text) blocks
+  // Tj and TJ are the PDF text-showing operators
   const titles: RawTitle[] = [];
+  const textChunks: string[] = [];
 
-  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-    const page = await pdf.getPage(pageNum);
-    const textContent = await page.getTextContent();
-    const lines = textContent.items
-      .map((item: unknown) => {
-        const textItem = item as { str: string };
-        return textItem.str;
-      })
-      .join("\n")
-      .split("\n")
-      .map((l: string) => l.trim())
-      .filter((l: string) => l.length > 2);
+  // Match Tj strings: (text) Tj
+  const tjMatches = raw.matchAll(/\(([^)]{2,80})\)\s*Tj/g);
+  for (const m of tjMatches) {
+    textChunks.push(m[1]);
+  }
 
-    for (let li = 0; li < lines.length; li++) {
-      const line = lines[li];
-      // Look for Netflix PDF patterns: title followed by thumb indicator
-      // Filled = Like, Hollow = Dislike
-      let cleanTitle = line;
-      if (line.includes("| ?") || line.match(/\|\s*$/)) {
-        // The "| ?" or trailing pipe indicates where thumb icons would be
-        cleanTitle = line.replace(/\|\s*\??$/, "").trim();
-      }
-
-      // Skip lines that don't look like movie titles (too short, all numbers, etc.)
-      if (cleanTitle.length < 2) continue;
-      if (/^\d+$/.test(cleanTitle)) continue;
-      if (
-        /^(page|date|title|rating|#|http)/i.test(cleanTitle)
-      )
-        continue;
-
-      // Deduplicate
-      if (
-        titles.some(
-          (t) => t.title.toLowerCase() === cleanTitle.toLowerCase()
-        )
-      )
-        continue;
-
-      // PDF = liked movies list. Every title extracted is a like.
-      titles.push({
-        title: cleanTitle,
-        sentiment: "like",
-        source: "pdf",
-      });
-
-      // Yield every 8 lines so the browser can paint animations
-      if (li % 8 === 0) {
-        await new Promise((r) => setTimeout(r, 0));
-      }
+  // Match TJ arrays: [(text) ...] TJ
+  const tjArrayMatches = raw.matchAll(/\[([^\]]{2,200})\]\s*TJ/g);
+  for (const m of tjArrayMatches) {
+    const inner = m[1].matchAll(/\(([^)]{2,})\)/g);
+    for (const part of inner) {
+      textChunks.push(part[1]);
     }
+  }
 
-    // Report page progress (0.15 → 0.95 range spread across pages)
-    const pageFraction = 0.15 + (pageNum / pdf.numPages) * 0.8;
-    onProgress?.(pageFraction);
+  onProgress?.(0.5);
+  await new Promise((r) => setTimeout(r, 0));
 
-    // Yield to the main thread after every page
-    await new Promise((r) => setTimeout(r, 0));
+  // Clean and filter chunks into candidate titles
+  const skipPatterns = /^(page|date|title|rating|#|http|viewing|activity|account|netflix|watching|show\s*more|back\s*to)/i;
+  const datePattern = /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/;
+
+  for (let i = 0; i < textChunks.length; i++) {
+    // Decode common PDF escape sequences
+    let chunk = textChunks[i]
+      .replace(/\\n/g, " ")
+      .replace(/\\r/g, " ")
+      .replace(/\\t/g, " ")
+      .replace(/\\\(/g, "(")
+      .replace(/\\\)/g, ")")
+      .replace(/\\\\/g, "\\")
+      .trim();
+
+    // Strip trailing pipe artifacts from PDF layout
+    chunk = chunk.replace(/\s*\|\s*\??$/, "").trim();
+
+    if (chunk.length < 3) continue;
+    if (/^\d+$/.test(chunk)) continue;
+    if (datePattern.test(chunk)) continue;
+    if (skipPatterns.test(chunk)) continue;
+
+    // Deduplicate
+    if (titles.some((t) => t.title.toLowerCase() === chunk.toLowerCase())) continue;
+
+    titles.push({
+      title: chunk,
+      sentiment: "like", // PDF = liked movies list
+      source: "pdf",
+    });
+
+    if (i % 10 === 0) {
+      onProgress?.(0.5 + (i / textChunks.length) * 0.45);
+      await new Promise((r) => setTimeout(r, 0));
+    }
   }
 
   onProgress?.(1.0);

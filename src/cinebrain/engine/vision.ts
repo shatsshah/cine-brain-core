@@ -192,11 +192,27 @@ export function matchInspirationColors(
         }
       }
 
-      const matchPercent = Math.round((matchCount / (inspHsls.length * movieHsls.length)) * 100);
+      const totalPairs = inspHsls.length * movieHsls.length;
+      let matchPercent = 0;
+      
+      if (totalPairs > 0) {
+        matchPercent = matchCount > 0 
+          ? Math.round((matchCount / totalPairs) * 100)
+          : Math.round(
+              100 - (movieHsls.reduce((sum, mh) => {
+                const closest = Math.min(...inspHsls.map(ih =>
+                  Math.abs(ih.h - mh.h) / 360 +
+                  Math.abs(ih.s - mh.s) +
+                  Math.abs(ih.l - mh.l)
+                ));
+                return sum + closest;
+              }, 0) / movieHsls.length) * 33
+            );
+      }
       return { movieId: movie.id, matchPercent, matchedHueRange: matchedHue };
     })
-    .filter((m) => m.matchPercent >= 15)
-    .sort((a, b) => b.matchPercent - a.matchPercent);
+    .sort((a, b) => b.matchPercent - a.matchPercent)
+    .slice(0, 5);
 }
 
 /** Convert visual traits to a vector (42 dimensions for fusion) */

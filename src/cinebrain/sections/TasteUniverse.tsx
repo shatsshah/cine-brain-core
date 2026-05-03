@@ -5,7 +5,7 @@ import * as THREE from "three";
 import { SectionHeader } from "../components/SectionHeader";
 import { useCineBrainStore } from "../store";
 import type { EnrichedMovie } from "../types";
-import { Sparkles } from "lucide-react";
+import { Sparkles, Loader2 } from "lucide-react";
 
 export const TasteUniverse = () => {
   const movies = useCineBrainStore((s) => s.movies);
@@ -15,11 +15,23 @@ export const TasteUniverse = () => {
   const rerank = useCineBrainStore((s) => s.rerank);
   const selectMovie = useCineBrainStore((s) => s.selectMovie);
   const selectedMovieId = useCineBrainStore((s) => s.selectedMovieId);
+  const hasIngested = useCineBrainStore((s) => s.hasIngested);
+  const isEnriching = useCineBrainStore((s) => s.isEnriching);
+  const enrichProgress = useCineBrainStore((s) => s.enrichProgress);
+  const themeWeights = useCineBrainStore((s) => s.themeWeights);
+  const aggregatePalette = useCineBrainStore((s) => s.aggregatePalette);
 
   const selected = movies.find((m) => m.id === selectedMovieId) || movies[0];
   const [shake, setShake] = useState(0);
 
+  // ── Dual-Readiness Check ──
+  // Recommendations only render when BOTH color palette and thematic DNA are real data
+  const paletteReady = aggregatePalette.length > 0 && aggregatePalette[0] !== "#1C2B4B";
+  const dnaReady = themeWeights.length > 0;
+  const dataReady = movies.length > 0 && paletteReady && dnaReady && !isEnriching;
+
   const ranked = useMemo(() => {
+    if (movies.length === 0) return [];
     const wt = (m: EnrichedMovie) =>
       (m.visual * storeWeights.visual + m.textual * storeWeights.textual + m.acoustic * storeWeights.acoustic) /
       (storeWeights.visual + storeWeights.textual + storeWeights.acoustic);
@@ -46,18 +58,42 @@ export const TasteUniverse = () => {
       <div className="max-w-7xl mx-auto relative">
         <SectionHeader kicker="Member 4 · Experience Engineer · Grand Finale" section="SECTION 05" title="The" emphasis="Taste Universe" />
 
+        {/* ── Scanning Overlay: shown during enrichment ── */}
+        {hasIngested && !dataReady && (
+          <div className="panel p-12 flex flex-col items-center justify-center gap-4 mb-6">
+            <Loader2 className="w-10 h-10 text-accent animate-spin" />
+            <div className="font-mono text-sm tracking-[0.22em] text-accent animate-blink">
+              {isEnriching ? `SCANNING UNIVERSE · ${enrichProgress}%` : "COMPUTING TASTE VECTORS..."}
+            </div>
+            <div className="font-mono text-[10px] text-muted-foreground">
+              Waiting for Color Palette + Thematic DNA before generating recommendations
+            </div>
+            <div className="w-48 h-1 rounded-full bg-card/80 overflow-hidden">
+              <div className="h-full rounded-full bg-gradient-to-r from-primary to-accent transition-all duration-300" style={{ width: `${enrichProgress}%` }} />
+            </div>
+          </div>
+        )}
+
         <div className="grid lg:grid-cols-3 gap-6">
           {/* Galaxy */}
           <div className="panel lg:col-span-2 p-0 h-[560px] relative overflow-hidden">
             <div className="absolute top-3 left-4 z-10 label-mono">3D Galaxy · drag to orbit · scroll to zoom</div>
-            <Canvas camera={{ position: [0, 0, 4.5], fov: 55 }} dpr={[1, 2]}>
-              <Suspense fallback={null}>
-                <ambientLight intensity={0.4} />
-                <pointLight position={[0, 0, 0]} intensity={2} color={"#f59e0b"} />
-                <Galaxy movies={movies} selected={selected?.id || ""} top5={ranked} onSelect={(m) => selectMovie(m.id)} shake={shake} />
-                <OrbitControls enablePan={false} minDistance={2} maxDistance={9} autoRotate autoRotateSpeed={0.4} />
-              </Suspense>
-            </Canvas>
+            {movies.length > 0 ? (
+              <Canvas camera={{ position: [0, 0, 4.5], fov: 55 }} dpr={[1, 2]}>
+                <Suspense fallback={null}>
+                  <ambientLight intensity={0.4} />
+                  <pointLight position={[0, 0, 0]} intensity={2} color={"#f59e0b"} />
+                  <Galaxy movies={movies} selected={selected?.id || ""} top5={ranked} onSelect={(m) => selectMovie(m.id)} shake={shake} />
+                  <OrbitControls enablePan={false} minDistance={2} maxDistance={9} autoRotate autoRotateSpeed={0.4} />
+                </Suspense>
+              </Canvas>
+            ) : (
+              <div className="h-full flex items-center justify-center">
+                <div className="text-center">
+                  <div className="font-mono text-[11px] text-muted-foreground animate-blink">Awaiting stellar data...</div>
+                </div>
+              </div>
+            )}
             <div className="absolute bottom-3 left-4 right-4 flex flex-wrap gap-3 text-xs">
               <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full" style={{ background: "hsl(var(--amber))", boxShadow: "0 0 8px hsl(var(--amber))" }} /> Your taste profile</span>
               <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-primary" /> Top match</span>
@@ -125,28 +161,30 @@ export const TasteUniverse = () => {
             </div>
           </div>
 
-          {/* Cinematic Mirror */}
-          <div className="panel panel-crimson lg:col-span-3 p-8 relative overflow-hidden" style={{ background: "linear-gradient(135deg, hsl(var(--phantom)) 0%, hsl(var(--card)) 100%)" }}>
-            <div className="absolute -right-20 -top-20 w-72 h-72 rounded-full" style={{ background: "radial-gradient(circle, hsl(var(--neon)/0.3), transparent 70%)" }} />
-            <div className="relative grid md:grid-cols-[1fr_auto] gap-8 items-center">
-              <div>
-                <span className="label-mono text-primary">Based on your multimodal profile · your archetype is</span>
-                <h3 className="mt-2 font-serif text-5xl md:text-6xl font-black" style={{ fontFamily: "'Playfair Display', serif" }}>
-                  The <em className="text-gradient-neon not-italic">{archetype.name.replace("The ", "")}</em>
-                </h3>
-                <p className="mt-4 text-foreground/80 max-w-2xl leading-relaxed">{archetype.blurb}</p>
-                <div className="mt-5 flex flex-wrap gap-2">
-                  {archetype.films.map((f) => <span key={f} className="chip">{f}</span>)}
+          {/* Cinematic Mirror — only renders when BOTH palette + DNA are ready */}
+          {dataReady && (
+            <div className="panel panel-crimson lg:col-span-3 p-8 relative overflow-hidden" style={{ background: "linear-gradient(135deg, hsl(var(--phantom)) 0%, hsl(var(--card)) 100%)" }}>
+              <div className="absolute -right-20 -top-20 w-72 h-72 rounded-full" style={{ background: "radial-gradient(circle, hsl(var(--neon)/0.3), transparent 70%)" }} />
+              <div className="relative grid md:grid-cols-[1fr_auto] gap-8 items-center">
+                <div>
+                  <span className="label-mono text-primary">Based on your multimodal profile · your archetype is</span>
+                  <h3 className="mt-2 font-serif text-5xl md:text-6xl font-black" style={{ fontFamily: "'Playfair Display', serif" }}>
+                    The <em className="text-gradient-neon not-italic">{archetype.name.replace("The ", "")}</em>
+                  </h3>
+                  <p className="mt-4 text-foreground/80 max-w-2xl leading-relaxed">{archetype.blurb}</p>
+                  <div className="mt-5 flex flex-wrap gap-2">
+                    {archetype.films.map((f) => <span key={f} className="chip">{f}</span>)}
+                  </div>
                 </div>
-              </div>
-              <div className="flex flex-col items-center justify-center">
-                <div className="w-32 h-32 rounded-2xl flex items-center justify-center text-6xl shadow-[var(--shadow-neon)]" style={{ background: "linear-gradient(135deg, hsl(var(--cyan)) 0%, hsl(var(--neon)) 100%)" }}>
-                  <Sparkles className="w-16 h-16 text-white" strokeWidth={1.5} />
+                <div className="flex flex-col items-center justify-center">
+                  <div className="w-32 h-32 rounded-2xl flex items-center justify-center text-6xl shadow-[var(--shadow-neon)]" style={{ background: "linear-gradient(135deg, hsl(var(--cyan)) 0%, hsl(var(--neon)) 100%)" }}>
+                    <Sparkles className="w-16 h-16 text-white" strokeWidth={1.5} />
+                  </div>
+                  <div className="mt-3 text-primary font-mono text-xs tracking-[0.22em]">CONFIDENCE · {archetype.confidence}%</div>
                 </div>
-                <div className="mt-3 text-primary font-mono text-xs tracking-[0.22em]">CONFIDENCE · {archetype.confidence}%</div>
               </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </section>

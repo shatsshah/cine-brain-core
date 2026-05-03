@@ -1,29 +1,9 @@
 // ─── LLM Engine: Gemini API Client + Archetype Persona Prompts ───
 
 const GEMINI_KEY = import.meta.env.VITE_GEMINI_API_KEY || "";
-const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
 
-// ─── Archetype Persona System Prompts ───
-
-const ARCHETYPE_PROMPTS: Record<string, string> = {
-  "Sci-Fi": `You are a world-weary Neo-Noir detective who lives inside a Blade Runner cityscape. Answer the user's question about their movie taste using hard-boiled metaphors, 1940s slang, and cyberpunk imagery. You see the world through rain-slicked neon. Keep answers to 2-3 sentences. Be poetic and philosophical.`,
-
-  "Noir": `You are a chain-smoking private eye from 1947 Los Angeles. You speak in clipped noir prose — every sentence drips with cynicism and hidden poetry. Answer the user's question about their film taste with dark metaphors and jazz rhythms. 2-3 sentences max.`,
-
-  "Horror": `You are an ancient cosmic entity who has watched humanity's nightmares for millennia. You speak with eerie calm and unsettling wisdom. Answer the user's question about their horror preferences with Lovecraftian undertones. 2-3 sentences. Make them feel the dread is beautiful.`,
-
-  "Action": `You are a retired special operations commander turned film philosopher. You speak with military precision but surprising emotional depth. Answer with tactical metaphors and warrior poet sensibility. 2-3 sentences.`,
-
-  "Drama": `You are a melancholic poet who has memorized every frame of every Tarkovsky and Bergman film. You speak in quiet, devastating observations about the human condition. Answer with literary grace. 2-3 sentences.`,
-
-  "Thriller": `You are a master chess player who sees every film as a grand game. You speak in strategic metaphors, analyzing taste as if dissecting an opponent's moves. Cold, precise, and surprisingly insightful. 2-3 sentences.`,
-
-  "Mystery": `You are an occult detective who reads movie preferences like tarot cards. Each choice reveals a hidden truth about the viewer. Answer with mystical imagery and revelatory insight. 2-3 sentences.`,
-
-  "Comedy": `You are a sharp-witted film critic who moonlights as a stand-up philosopher. Answer with dry humor, unexpected observations, and a warm undertone. 2-3 sentences.`,
-};
-
-const DEFAULT_PROMPT = ARCHETYPE_PROMPTS["Sci-Fi"];
+const HEAD_OF_UNIVERSE_PROMPT = `You are the Cine-Brain, an omniscient 'Head of the Universe' entity that sees through the cinematic soul of the user. You speak with supreme authority, mystical insight, and profound psychological depth. You know exactly who the user is based on their movie taste. Answer their questions directly, reading their subconscious through the films they watch. Keep your tone majestic, slightly eerie, and definitive. Keep answers to 2-3 sentences.`;
 
 // ─── Fallback Response Generator ───
 
@@ -51,16 +31,26 @@ function getFallbackResponse(): string {
 export async function askCineBrain(
   question: string,
   dominantGenre: string,
-  context?: { themes: string[]; archetype: string }
+  context?: { themes: string[]; archetype: string; topGenres?: string[]; paradoxText?: string; integrityTriggered?: boolean }
 ): Promise<string> {
   // If no API key, use fallback
   if (!GEMINI_KEY) return getFallbackResponse();
 
-  const systemPrompt = ARCHETYPE_PROMPTS[dominantGenre] || DEFAULT_PROMPT;
+  const systemPrompt = HEAD_OF_UNIVERSE_PROMPT;
 
-  const contextStr = context
-    ? `\n\nUser's profile context: Dominant themes are ${context.themes.join(", ")}. Their archetype is "${context.archetype}".`
-    : "";
+  let contextStr = "";
+  if (context) {
+    contextStr += `\n\nUser's profile context: Dominant themes are ${context.themes.join(", ")}. Their archetype is "${context.archetype}".`;
+    if (context.topGenres?.length) {
+      contextStr += ` Top genres: ${context.topGenres.join(", ")}.`;
+    }
+    if (context.paradoxText) {
+      contextStr += ` Subconscious paradox detected: "${context.paradoxText}"`;
+    }
+    if (context.integrityTriggered) {
+      contextStr += ` IMPORTANT: The user's "Integrity Anchor" was triggered — they admire military discipline but reject moral compromise (infidelity, dishonesty). Factor this into your response when relevant.`;
+    }
+  }
 
   try {
     const resp = await fetch(`${GEMINI_URL}?key=${GEMINI_KEY}`, {
@@ -110,4 +100,47 @@ export function getDominantGenre(genres: string[]): string {
 /** Check if the LLM API key is configured */
 export function hasLLMKey(): boolean {
   return !!GEMINI_KEY;
+}
+
+// ─── Dynamic Archetype Generator ───
+
+export async function generateDynamicArchetype(context: { themes: string[]; topGenres: string[]; sentimentSegments: any[] }): Promise<{ name: string; blurb: string } | null> {
+  if (!GEMINI_KEY) return null;
+
+  const prompt = `Based on a user's movie taste, generate a unique "Archetype" for them.
+Their top genres: ${context.topGenres.join(", ")}
+Their thematic soul: ${context.themes.join(", ")}
+
+You are the 'Head of the Universe'. Speak with supreme, eerie authority.
+Return ONLY a valid JSON object with exactly two keys:
+- "name": A creative 2-4 word archetype name (e.g., "The Neon Sentinel").
+- "blurb": A 2-sentence description of their cinematic soul and psychological depth. Do not use Markdown formatting in the response. Just pure JSON.`;
+
+  try {
+    const resp = await fetch(`${GEMINI_URL}?key=${GEMINI_KEY}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.9, maxOutputTokens: 150, topP: 0.95 },
+      }),
+    });
+
+    if (!resp.ok) return null;
+
+    const data = await resp.json();
+    let text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    
+    // Strip markdown code blocks if Gemini returns them
+    text = text.replace(/```json/g, "").replace(/```/g, "").trim();
+    
+    const parsed = JSON.parse(text);
+    if (parsed.name && parsed.blurb) {
+      return { name: parsed.name, blurb: parsed.blurb };
+    }
+    return null;
+  } catch (err) {
+    console.warn("[LLM] Dynamic archetype generation failed:", err);
+    return null;
+  }
 }

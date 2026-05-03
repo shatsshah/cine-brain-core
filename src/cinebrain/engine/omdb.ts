@@ -36,7 +36,10 @@ async function throttle(): Promise<void> {
 }
 
 export async function searchMovie(title: string, year?: number): Promise<MovieMetadata | null> {
-  if (!OMDB_KEY) return null;
+  if (!OMDB_KEY || OMDB_KEY === 'YOUR_KEY_HERE') {
+    console.warn('[OMDb] No API key configured. Skipping metadata fetch.');
+    return null;
+  }
   const cacheKey = `${title.toLowerCase()}:${year || ""}`;
   if (cache.has(cacheKey)) return cache.get(cacheKey)!;
   await throttle();

@@ -4,9 +4,11 @@ import { Vault } from "@/cinebrain/sections/Vault";
 import { VisionLab } from "@/cinebrain/sections/VisionLab";
 import { LinguisticBrain } from "@/cinebrain/sections/LinguisticBrain";
 import { TasteUniverse } from "@/cinebrain/sections/TasteUniverse";
+import { useCineBrainStore } from "@/cinebrain/store";
 
 const Index = () => {
   const [ghost, setGhost] = useState(false);
+  const sessionId = useCineBrainStore((s) => s.sessionId);
 
   useEffect(() => {
     document.documentElement.classList.toggle("ghost", ghost);
@@ -16,9 +18,12 @@ const Index = () => {
     <main className="min-h-screen bg-background text-foreground">
       <Landing onGhostToggle={setGhost} ghost={ghost} />
       <Vault />
-      <VisionLab />
-      <LinguisticBrain />
-      <TasteUniverse />
+      {/* key={sessionId} forces Vision + Linguistic + TasteUniverse to
+          fully re-mount when the Hydration Package is broadcast, ensuring
+          all charts, DNA helix, and posters appear simultaneously. */}
+      <VisionLab key={`vision-${sessionId}`} />
+      <LinguisticBrain key={`brain-${sessionId}`} />
+      <TasteUniverse key={`universe-${sessionId}`} />
       <footer className="border-t border-border bg-[hsl(var(--phantom))] px-6 md:px-12 py-12">
         <div className="max-w-7xl mx-auto grid md:grid-cols-2 gap-8">
           <div>

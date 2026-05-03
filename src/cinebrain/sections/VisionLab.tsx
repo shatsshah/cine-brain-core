@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { SectionHeader } from "../components/SectionHeader";
 import { useCineBrainStore } from "../store";
-import { ImagePlus, Loader2 } from "lucide-react";
+import { ImagePlus, Loader2, Eye } from "lucide-react";
 
 const HEX_AXES = ["Darkness", "Contrast", "Saturation", "Warmth", "Symmetry", "Complexity"];
 
@@ -12,9 +12,14 @@ export const VisionLab = () => {
   const visualTraits = useCineBrainStore((s) => s.visualTraits);
   const uploadInspiration = useCineBrainStore((s) => s.uploadInspiration);
   const inspirationMatches = useCineBrainStore((s) => s.inspirationMatches);
+  const inspirationColors = useCineBrainStore((s) => s.inspirationColors ?? []);
+  const isEnriching = useCineBrainStore((s) => s.isEnriching);
+  const enrichProgress = useCineBrainStore((s) => s.enrichProgress);
 
   const [selected, setSelected] = useState(movies[0]);
   const [isUploading, setIsUploading] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [hoveredMatch, setHoveredMatch] = useState<string | null>(null);
   const inspInputRef = useRef<HTMLInputElement>(null);
 
   const hexValues: number[] = [
@@ -25,6 +30,11 @@ export const VisionLab = () => {
   const handleInspirationUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // Generate local preview URL
+    const objectUrl = URL.createObjectURL(file);
+    setPreviewUrl(objectUrl);
+
     setIsUploading(true);
     await uploadInspiration(file);
     setIsUploading(false);
@@ -71,7 +81,22 @@ export const VisionLab = () => {
         {/* Poster grid + dissection */}
         <div className="grid lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 panel p-5">
-            <span className="label-mono">Poster Grid · Click to dissect</span>
+            <div className="flex items-center justify-between">
+              <span className="label-mono">Poster Grid · Click to dissect</span>
+              {isEnriching && (
+                <div className="flex items-center gap-2">
+                  <Loader2 className="w-3 h-3 text-accent animate-spin" />
+                  <span className="font-mono text-[9px] tracking-[0.18em] text-accent">
+                    ENRICHING · {enrichProgress}% · {movies.length} films
+                  </span>
+                </div>
+              )}
+            </div>
+            {isEnriching && (
+              <div className="mt-2 w-full h-1 rounded-full bg-card/80 overflow-hidden">
+                <div className="h-full rounded-full bg-gradient-to-r from-primary to-accent transition-all duration-300" style={{ width: `${enrichProgress}%` }} />
+              </div>
+            )}
             <div className="mt-4 grid grid-cols-3 sm:grid-cols-4 gap-3">
               {movies.slice(0, 12).map((m) => (
                 <button key={m.id} onClick={() => setSelected(m)}
@@ -122,56 +147,176 @@ export const VisionLab = () => {
             )}
           </div>
 
-          {/* Inspiration upload */}
-          <div className="panel lg:col-span-3 p-6 flex flex-col md:flex-row gap-6 items-center">
-            <input
-              ref={inspInputRef}
-              type="file"
-              accept="image/*"
-              onChange={handleInspirationUpload}
-              className="hidden"
-            />
-            <button
-              onClick={() => inspInputRef.current?.click()}
-              disabled={isUploading}
-              className="w-44 h-52 rounded-md bg-card/60 border-2 border-dashed border-accent/40 flex flex-col items-center justify-center relative overflow-hidden hover:border-accent/70 transition-colors"
-            >
-              <div className="absolute inset-x-0 h-[2px] bg-accent/70 top-0 animate-sweep" style={{ boxShadow: "0 0 12px hsl(var(--cyan))" }} />
-              {isUploading ? (
-                <Loader2 className="w-7 h-7 text-accent animate-spin" />
-              ) : (
-                <ImagePlus className="w-7 h-7 text-accent" />
-              )}
-              <span className="font-mono text-[10px] tracking-[0.18em] text-accent mt-2">
-                {isUploading ? "SCANNING..." : "+ DROP IMAGE"}
-              </span>
-              <span className="font-mono text-[9px] text-muted-foreground mt-1">Visual DNA Match</span>
-            </button>
-            <div className="flex-1">
-              <h4 className="font-serif text-2xl font-bold" style={{ fontFamily: "'Playfair Display', serif" }}>Inspiration Upload</h4>
-              <p className="text-muted-foreground mt-2 leading-relaxed">
-                Drop any personal photo — a dark forest, neon street, rainy window — and the system finds visually resonant movies from your taste universe.
-              </p>
-              {inspirationMatches.length > 0 && (
-                <div className="mt-3">
-                  <span className="label-mono text-accent">MATCHES FOUND</span>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {inspirationMatches.slice(0, 5).map((match) => {
-                      const movie = movies.find((m) => m.id === match.movieId);
-                      return movie ? (
-                        <span key={match.movieId} className="chip-cyan chip">
-                          {movie.title} · {match.matchPercent}%
-                        </span>
-                      ) : null;
-                    })}
-                  </div>
-                </div>
-              )}
-              {inspirationMatches.length === 0 && (
-                <p className="text-muted-foreground mt-2 text-sm">
-                  The Polaroid activates with a Cyber Cyan scan as it processes your image's visual fingerprint against movie poster embeddings.
+          {/* ══════ Cinematic DNA Cross-Pollination ══════ */}
+          <div className="panel lg:col-span-3 p-6">
+            <div className="flex flex-col md:flex-row gap-6 items-start">
+              <input
+                ref={inspInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleInspirationUpload}
+                className="hidden"
+              />
+
+              {/* ── Polaroid Frame with Image Preview ── */}
+              <button
+                onClick={() => inspInputRef.current?.click()}
+                disabled={isUploading}
+                className="w-48 min-h-[220px] rounded-md bg-card/60 border-2 border-dashed border-accent/40 flex flex-col items-center justify-center relative overflow-hidden hover:border-accent/70 transition-all shrink-0 group"
+              >
+                {/* Scan line */}
+                <div className="absolute inset-x-0 h-[2px] bg-accent/70 top-0 animate-sweep" style={{ boxShadow: "0 0 12px hsl(var(--cyan))" }} />
+
+                {previewUrl ? (
+                  /* ── Uploaded image preview ── */
+                  <>
+                    <img
+                      src={previewUrl}
+                      alt="Inspiration upload"
+                      className="absolute inset-0 w-full h-full object-cover opacity-90 group-hover:opacity-100 transition-opacity"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-[#08080C]/80 to-transparent" />
+                    {/* Extracted palette bar */}
+                    {inspirationColors.length > 0 && (
+                      <div className="absolute bottom-10 inset-x-3 flex h-3 rounded-sm overflow-hidden border border-accent/30">
+                        {inspirationColors.map((c, i) => (
+                          <div key={i} className="flex-1" style={{ background: c }} />
+                        ))}
+                      </div>
+                    )}
+                    <span className="absolute bottom-3 font-mono text-[9px] tracking-[0.18em] text-accent z-10">
+                      {isUploading ? "SCANNING..." : "PALETTE EXTRACTED"}
+                    </span>
+                  </>
+                ) : (
+                  /* ── Empty state ── */
+                  <>
+                    {isUploading ? (
+                      <Loader2 className="w-7 h-7 text-accent animate-spin" />
+                    ) : (
+                      <ImagePlus className="w-7 h-7 text-accent" />
+                    )}
+                    <span className="font-mono text-[10px] tracking-[0.18em] text-accent mt-2">
+                      {isUploading ? "SCANNING..." : "+ DROP IMAGE"}
+                    </span>
+                    <span className="font-mono text-[9px] text-muted-foreground mt-1">Visual DNA Match</span>
+                  </>
+                )}
+              </button>
+
+              {/* ── Description + Matches ── */}
+              <div className="flex-1">
+                <h4 className="font-serif text-2xl font-bold" style={{ fontFamily: "'Playfair Display', serif" }}>
+                  Cinematic DNA Cross-Pollination
+                </h4>
+                <p className="text-muted-foreground mt-2 leading-relaxed text-sm">
+                  Upload a photo to extract its <span className="text-accent font-medium">Color Palette</span>. The Cine-Brain will recommend movies with visually similar cinematography and poster hues.
+                  <span className="text-muted-foreground/60 ml-1">(This matches colors, not objects.)</span>
                 </p>
-              )}
+
+                {inspirationMatches.length > 0 ? (
+                  <div className="mt-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Eye className="w-4 h-4 text-accent" />
+                      <span className="label-mono text-accent">AESTHETIC MATCHES</span>
+                    </div>
+
+                    {/* Extracted palette display */}
+                    {inspirationColors.length > 0 && (
+                      <div className="mb-3 flex items-center gap-2">
+                        <span className="font-mono text-[9px] text-muted-foreground tracking-wider">YOUR PALETTE:</span>
+                        <div className="flex gap-1">
+                          {inspirationColors.map((c, i) => (
+                            <div key={i} className="group/swatch relative">
+                              <div
+                                className="w-6 h-6 rounded-sm border border-border hover:scale-125 transition-transform cursor-default"
+                                style={{ background: c }}
+                              />
+                              {/* Hex tooltip */}
+                              <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-[#08080C] border border-accent/30 rounded px-1.5 py-0.5 font-mono text-[9px] text-accent whitespace-nowrap opacity-0 group-hover/swatch:opacity-100 transition-opacity pointer-events-none z-20" style={{ boxShadow: "0 0 10px hsl(var(--cyan)/0.3)" }}>
+                                {c}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Match grid with explainability tooltips */}
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+                      {inspirationMatches.slice(0, 5).map((match) => {
+                        const movie = movies.find((m) => m.id === match.movieId);
+                        if (!movie) return null;
+                        const isHovered = hoveredMatch === match.movieId;
+
+                        return (
+                          <div
+                            key={match.movieId}
+                            className="relative group/card"
+                            onMouseEnter={() => setHoveredMatch(match.movieId)}
+                            onMouseLeave={() => setHoveredMatch(null)}
+                          >
+                            {/* Movie poster card */}
+                            <div
+                              className="aspect-[2/3] rounded-lg relative overflow-hidden border border-accent/30 hover:border-accent/60 transition-all hover:scale-[1.03]"
+                              style={{
+                                background: movie.posterUrl ? undefined : `linear-gradient(135deg, ${movie.posterColors[0]} 0%, ${movie.posterColors[2] || movie.posterColors[1]} 100%)`,
+                              }}
+                            >
+                              {movie.posterUrl ? (
+                                <img src={movie.posterUrl} alt={movie.title} className="absolute inset-0 w-full h-full object-cover" crossOrigin="anonymous" />
+                              ) : (
+                                <div className="absolute inset-0 flex items-center justify-center text-3xl">🎬</div>
+                              )}
+                              <div className="absolute inset-x-0 bottom-0 p-2 bg-gradient-to-t from-black/90 to-transparent">
+                                <div className="font-mono text-[9px] text-white/90 truncate" title={movie.title}>{movie.title}</div>
+                                <div className="font-mono text-[8px] text-accent">{match.matchPercent}% match</div>
+                              </div>
+                            </div>
+
+                            {/* ── Explainability Tooltip ── */}
+                            <div
+                              className={`absolute -top-2 left-1/2 -translate-x-1/2 -translate-y-full z-30 w-56 rounded-lg p-3 border transition-all duration-200 pointer-events-none ${
+                                isHovered
+                                  ? "opacity-100 scale-100"
+                                  : "opacity-0 scale-95"
+                              }`}
+                              style={{
+                                background: "#08080C",
+                                borderColor: "hsl(var(--cyan)/0.4)",
+                                boxShadow: "0 0 20px hsl(var(--cyan)/0.2), 0 4px 16px rgba(0,0,0,0.6)",
+                              }}
+                            >
+                              <div className="font-serif text-sm font-bold text-foreground mb-1">{movie.title}</div>
+                              <div className="font-mono text-[9px] tracking-[0.2em] text-accent mb-2">MATCHED VIA AESTHETIC</div>
+                              <div className="font-mono text-[10px] text-muted-foreground mb-2">
+                                Shared color frequencies between your photo and this poster:
+                              </div>
+                              {/* Mini swatch bar of the extracted colors */}
+                              <div className="flex h-4 rounded-sm overflow-hidden border border-border mb-1.5">
+                                {inspirationColors.map((c, i) => (
+                                  <div key={i} className="flex-1" style={{ background: c }} />
+                                ))}
+                              </div>
+                              <div className="flex flex-wrap gap-1">
+                                {inspirationColors.map((c, i) => (
+                                  <span key={i} className="font-mono text-[8px] text-accent/70">{c}</span>
+                                ))}
+                              </div>
+                              {/* Arrow */}
+                              <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-full w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-l-transparent border-r-transparent" style={{ borderTopColor: "hsl(var(--cyan)/0.4)" }} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground mt-3 text-sm">
+                    The Polaroid activates with a Cyber Cyan scan as it processes your image's visual fingerprint against movie poster embeddings.
+                  </p>
+                )}
+              </div>
             </div>
           </div>
         </div>

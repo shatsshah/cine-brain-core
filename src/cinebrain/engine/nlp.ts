@@ -194,32 +194,63 @@ export function calculateSentiment(
 
 // ─── Narrative Drift ───
 
+/** Intensity keywords that shift mood toward Dark/Tense */
+const INTENSE_TITLE_KEYWORDS = [
+  "article 370", "ic 814", "baramulla", "major", "uri", "surgical strike",
+  "war", "mission", "sniper", "army", "terror", "attack", "hostage",
+  "murder", "killer", "revenge", "blood", "death", "dark", "night",
+  "psycho", "horror", "haunted", "fear", "scream", "prey",
+];
+
+/** Lighter keywords that shift mood toward Uplifting */
+const LIGHT_TITLE_KEYWORDS = [
+  "love", "wedding", "holiday", "christmas", "comedy", "happy",
+  "dream", "sunshine", "family", "friend", "adventure", "magic",
+  "wonder", "joy", "dance", "sing", "chef", "cook", "garden",
+];
+
 /** Calculate mood drift over time from watch history */
 export function calculateDrift(
-  movies: { watchDate?: string; genres: string[]; sentiment: string }[]
+  movies: { watchDate?: string; genres: string[]; sentiment: string; title?: string }[]
 ): DriftPoint[] {
   // Group by year
-  const yearMap: Record<number, { sentimentSum: number; count: number; genres: string[] }> = {};
+  const yearMap: Record<number, {
+    sentimentSum: number; count: number; genres: string[];
+    intenseCount: number; lightCount: number;
+  }> = {};
 
   for (const movie of movies) {
     let year: number;
     if (movie.watchDate) {
       year = new Date(movie.watchDate).getFullYear();
-      if (isNaN(year) || year < 2015) year = 2023; // fallback
+      if (isNaN(year) || year < 2015) year = 2023;
     } else {
-      year = 2023 + Math.floor(Math.random() * 3); // distribute if no date
+      year = 2023 + Math.floor(Math.random() * 3);
     }
 
-    if (!yearMap[year]) yearMap[year] = { sentimentSum: 0, count: 0, genres: [] };
+    if (!yearMap[year]) yearMap[year] = { sentimentSum: 0, count: 0, genres: [], intenseCount: 0, lightCount: 0 };
     yearMap[year].count++;
     yearMap[year].genres.push(...movie.genres);
     yearMap[year].sentimentSum += movie.sentiment === "like" ? 0.7 : movie.sentiment === "dislike" ? 0.2 : 0.5;
+
+    // Check title intensity
+    const titleLower = (movie.title || "").toLowerCase();
+    if (INTENSE_TITLE_KEYWORDS.some((kw) => titleLower.includes(kw))) yearMap[year].intenseCount++;
+    if (LIGHT_TITLE_KEYWORDS.some((kw) => titleLower.includes(kw))) yearMap[year].lightCount++;
+
+    // Genre-based intensity
+    const darkGenres = ["Horror", "Thriller", "Crime", "War", "Noir"];
+    const lightGenres = ["Comedy", "Romance", "Animation", "Adventure"];
+    for (const g of movie.genres) {
+      if (darkGenres.includes(g)) yearMap[year].intenseCount += 0.3;
+      if (lightGenres.includes(g)) yearMap[year].lightCount += 0.3;
+    }
   }
 
   const moodLabels: [number, string][] = [
-    [0.8, "Euphoric"], [0.7, "Hopeful"], [0.6, "Optimistic"],
+    [0.85, "Euphoric"], [0.72, "Hopeful"], [0.6, "Optimistic"],
     [0.5, "Curious"], [0.4, "Restless"], [0.3, "Reflective"],
-    [0.2, "Cynical Noir"], [0.1, "Cosmic Dread"],
+    [0.2, "Cynical Noir"], [0.0, "Cosmic Dread"],
   ];
 
   const years = Object.keys(yearMap).map(Number).sort();
@@ -234,7 +265,19 @@ export function calculateDrift(
 
   return years.map((year) => {
     const data = yearMap[year];
-    const value = +(data.sentimentSum / data.count).toFixed(2);
+    // Base value from sentiment
+    let value = +(data.sentimentSum / data.count).toFixed(2);
+
+    // Shift based on intensity ratio
+    const intensityRatio = (data.intenseCount - data.lightCount) / Math.max(data.count, 1);
+    value = Math.max(0.05, Math.min(0.95, value - intensityRatio * 0.3));
+
+    // Add slight genre-based variance
+    const darkCount = data.genres.filter((g) => ["Horror", "Thriller", "Crime", "War", "Noir"].includes(g)).length;
+    const darkRatio = darkCount / Math.max(data.genres.length, 1);
+    value = Math.max(0.05, Math.min(0.95, value - darkRatio * 0.15));
+
+    value = +value.toFixed(2);
     const mood = moodLabels.find(([threshold]) => value >= threshold)?.[1] || "Cosmic Dread";
     return { year, mood, value };
   });

@@ -8,12 +8,12 @@ import type {
   ThemeWeight, ParadoxCard, SentimentSegment, DriftPoint,
   ArchetypeResult, AuditReceipt, InspirationMatch,
 } from "./types";
-import { ingestFile as parseFile, crossJoinTitles } from "./engine/ingest";
+import { parseCSV, parsePDF, crossJoinTitles } from "./engine/ingest";
 import { searchMovie } from "./engine/omdb";
 import { buildAcousticProfile, aggregateAcousticProfiles, acousticToVector } from "./engine/acoustic";
 import { extractColorsFromUrl, extractColorsFromFile, calculateVisualTraits, aggregateVisualTraits, matchInspirationColors, visualToVector, namePaletteColor } from "./engine/vision";
 import { extractThemes, detectParadoxes, calculateSentiment, calculateDrift, nlpToVector, applyNegativeSeeds } from "./engine/nlp";
-import { askCineBrain, getDominantGenre } from "./engine/llm";
+import { askCineBrain, getDominantGenre, generateDynamicArchetype } from "./engine/llm";
 import { fuseVectors, matchArchetype, calculateMatchScore, projectToGalaxy } from "./engine/fusion";
 import { generateAnonId, buildAuditReceipt, addLaplaceNoise, vaporize } from "./engine/privacy";
 
@@ -58,6 +58,7 @@ interface CineBrainStore {
   paletteNames: string[];
   visualTraits: VisualTraits;
   inspirationMatches: InspirationMatch[];
+  inspirationColors: string[];
   themeWeights: ThemeWeight[];
   paradoxCards: ParadoxCard[];
   sentimentSegments: SentimentSegment[];
@@ -71,6 +72,7 @@ interface CineBrainStore {
   convo: { q: string; a: string }[];
   isLLMLoading: boolean;
   hasIngested: boolean;
+  sessionId: number;
 
   // Actions
   ingestBatch: (files: File[]) => Promise<void>;
@@ -108,6 +110,7 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
   paletteNames: fallbackPaletteNames,
   visualTraits: { darkness: 0.78, contrast: 0.92, saturation: 0.66, warmth: 0.4, symmetry: 0.54, complexity: 0.81 },
   inspirationMatches: [],
+  inspirationColors: [],
   themeWeights: fallbackThemes,
   paradoxCards: [{
     text: "You prefer dystopias with intimate human connection over dystopias about societal collapse.",
@@ -133,13 +136,14 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
   ],
   isLLMLoading: false,
   hasIngested: false,
+  sessionId: 0,
 
   // ─── Actions ───
 
   ingestBatch: async (files: File[]) => {
     const csvFile = files.find((f) => f.name.toLowerCase().endsWith(".csv"));
     const pdfFile = files.find((f) => f.name.toLowerCase().endsWith(".pdf"));
-    
+
     if (!csvFile || !pdfFile) return;
 
     set((s) => ({ isIngesting: true, ingestionProgress: 0, streamingTitles: [], fileCount: s.fileCount + 2 }));
@@ -147,30 +151,27 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
     // ═══════════════════════════════════════════════════════════════
     // PHASE 1: THE SCRUB (0% → 100%)
     // Only CSV + PDF parsing + title streaming. NO API calls.
+    // Sequential Pipeline: CSV first, then PDF. NO Promise.all().
     // ═══════════════════════════════════════════════════════════════
 
-    // ── Step 1: Parse both files concurrently with real progress ──
-    let csvProgress = 0;
-    let pdfProgress = 0;
-    const updateParseProgress = () => {
-      const combined = Math.round(((csvProgress + pdfProgress) / 2) * 50);
-      set({ ingestionProgress: combined });
-    };
+    set({ ingestionProgress: 0, status: 'scrubbing' } as any);
 
-    const [csvResult, pdfResult] = await Promise.all([
-      parseFile(csvFile, (frac) => {
-        csvProgress = frac;
-        updateParseProgress();
-      }),
-      parseFile(pdfFile, (frac) => {
-        pdfProgress = frac;
-        updateParseProgress();
-      }),
-    ]);
+    // ── Step 1: Parse CSV First (0% → 25%) ──
+    const csvText = await csvFile.text();
+    const csvResult = parseCSV(csvText);
+    set({ ingestionProgress: 25 });
+
+    // Yield to main thread to allow React to paint the 25% progress
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // ── Step 2: Parse PDF Second (25% → 50%) ──
+    const pdfResult = await parsePDF(pdfFile, (progress) => {
+      set({ ingestionProgress: 25 + Math.round(progress * 25) });
+    });
 
     set({ ingestionProgress: 50 });
     // Yield so the 50% paints
-    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 100));
 
     // ── Step 2: Stream CSV titles into the Live Scrub Theater (50→80%) ──
     const totalTitles = csvResult.titles.length + pdfResult.titles.length;
@@ -226,28 +227,72 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
 
     // ══════════════════════════════════════════════════
     // SCRUB COMPLETE → 100% SECURED
+    // Broadcast the Hydration Package: rawTitles + audit
     // ══════════════════════════════════════════════════
-    set({
+    set((s) => ({
       ingestionProgress: 100,
       isIngesting: false,
       hasIngested: true,
       audit,
-    });
+      rawTitles: allTitles,
+      sessionId: s.sessionId + 1,
+    }));
 
     // ═══════════════════════════════════════════════════════════════
     // PHASE 2: BACKGROUND ENRICHMENT (runs after scrub is SECURED)
+    // Progressive hydration: every 3 movies, recompute all downstream
+    // state so DNA helix, bubbles, drift, palette update live.
     // ═══════════════════════════════════════════════════════════════
-    set({ isEnriching: true, enrichProgress: 0 });
+    set({
+      isEnriching: true,
+      enrichProgress: 0,
+      // Clear fallback data so components don't show stale mock data
+      movies: [],
+      themeWeights: [],
+      paradoxCards: [],
+      sentimentSegments: [
+        { label: "Dark", val: 0.25, color: "hsl(var(--neon))" },
+        { label: "Tense", val: 0.25, color: "hsl(var(--crimson))" },
+        { label: "Ambiguous", val: 0.25, color: "hsl(var(--phantom))" },
+        { label: "Uplifting", val: 0.25, color: "hsl(var(--cyan))" },
+      ],
+      driftPoints: [],
+      convo: [],
+    });
 
     const enriched: EnrichedMovie[] = [];
+
+    // Expanded theme keyword map for better NLP extraction from OMDb Plot
+    const themeKws: Record<string, string[]> = {
+      Isolation: ["alone", "lonely", "isolated", "solitary", "abandoned", "exile", "outcast", "stranded"],
+      Identity: ["identity", "self", "who am i", "persona", "double", "clone", "mask", "disguise"],
+      Dystopia: ["dystopia", "apocalypse", "totalitarian", "oppressive", "regime", "rebellion", "post-apocalyptic"],
+      Memory: ["memory", "remember", "forget", "amnesia", "past", "nostalgia", "flashback"],
+      Grief: ["grief", "loss", "death", "mourning", "funeral", "tragedy", "sorrow", "widow"],
+      Time: ["time", "temporal", "clock", "future", "loop", "paradox", "eternal", "dimension"],
+      Redemption: ["redemption", "forgive", "salvation", "reform", "second chance", "atonement"],
+      Betrayal: ["betray", "traitor", "backstab", "double-cross", "deceive", "treachery", "trust"],
+      Chaos: ["chaos", "anarchy", "destruction", "disorder", "mayhem", "havoc"],
+      Sacrifice: ["sacrifice", "martyr", "selfless", "noble", "hero", "duty", "cost"],
+      Love: ["love", "romance", "passion", "desire", "relationship", "affair", "devotion", "heart"],
+      Power: ["power", "control", "dominance", "authority", "corrupt", "tyrant", "empire"],
+      Family: ["family", "father", "mother", "son", "daughter", "brother", "sister", "parent"],
+      Justice: ["justice", "law", "court", "trial", "verdict", "crime", "punishment", "revenge"],
+      Survival: ["survive", "survival", "endure", "escape", "fight", "wilderness"],
+      Technology: ["technology", "ai", "robot", "cyber", "digital", "machine", "android", "virtual"],
+      Madness: ["mad", "insane", "crazy", "psycho", "deranged", "asylum", "sanity"],
+      Fate: ["fate", "destiny", "prophecy", "inevitable", "chosen", "oracle"],
+    };
 
     for (let i = 0; i < allTitles.length; i++) {
       const raw = allTitles[i];
       const enrichFrac = i / Math.max(allTitles.length, 1);
       set({ enrichProgress: Math.round(enrichFrac * 100) });
 
+      // Yield to let React paint
       await new Promise((r) => setTimeout(r, 0));
 
+      // ── OMDb Fetch: Poster, Title, Year, Genre, Plot ──
       const meta = await searchMovie(raw.title, raw.year);
       const genres = meta?.genres || ["Drama"];
       const genre = genres[0] || "Drama";
@@ -255,7 +300,7 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
       const posterUrl = meta?.posterUrl || null;
 
       let posterColors = ["#1a1a2e", "#a855f7", "#06b6d4", "#0f2035", "#cf6b3a"];
-      if (posterUrl) { try { posterColors = await extractColorsFromUrl(posterUrl); } catch {} }
+      if (posterUrl) { try { posterColors = await extractColorsFromUrl(posterUrl); } catch { } }
 
       const acousticProf = buildAcousticProfile(genre, raw.title);
       const acousticVec = acousticToVector(acousticProf);
@@ -266,21 +311,31 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
       const lowerTitle = raw.title.toLowerCase();
       const overviewLower = overview.toLowerCase();
       const hasMoralKeywords = moralKeywords.filter(kw => overviewLower.includes(kw)).length >= 2;
-      
+
       if (moralDislikeTitles.includes(lowerTitle) || hasMoralKeywords) {
         sentimentMultiplier = -5.0;
       }
 
+      // ── Extract themes from OMDb Plot + Genre ──
       const movieThemes: string[] = [];
-      const themeKws: Record<string, string[]> = {
-        Isolation: ["alone", "lonely", "isolated"], Identity: ["identity", "self", "who"],
-        Dystopia: ["dystopia", "apocalypse"], Memory: ["memory", "remember", "forget"],
-        Grief: ["grief", "loss", "death"], Time: ["time", "temporal", "future"],
-        Redemption: ["redemption", "forgive"], Betrayal: ["betray", "traitor"],
-        Chaos: ["chaos", "destruction"], Sacrifice: ["sacrifice", "hero"],
-      };
       for (const [theme, kws] of Object.entries(themeKws)) {
         if (kws.some((kw) => overviewLower.includes(kw))) movieThemes.push(theme);
+      }
+      // Also derive themes from genre names
+      if (genres.includes("Sci-Fi") || genres.includes("Science Fiction")) {
+        if (!movieThemes.includes("Technology")) movieThemes.push("Technology");
+      }
+      if (genres.includes("War")) {
+        if (!movieThemes.includes("Sacrifice")) movieThemes.push("Sacrifice");
+      }
+      if (genres.includes("Romance")) {
+        if (!movieThemes.includes("Love")) movieThemes.push("Love");
+      }
+      if (genres.includes("Horror")) {
+        if (!movieThemes.includes("Madness")) movieThemes.push("Madness");
+      }
+      if (genres.includes("Crime")) {
+        if (!movieThemes.includes("Justice")) movieThemes.push("Justice");
       }
       if (movieThemes.length === 0) movieThemes.push("Ambiguous");
 
@@ -299,13 +354,32 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
         evidence, x: 0, y: 0, z: 0, visualVector: visualVec, textualVector: [], acousticVector: acousticVec, fusedVector: [],
       });
 
-      if (i % 5 === 0 || i === allTitles.length - 1) set({ movies: [...enriched] });
+      // ── Progressive Hydration: every 3 movies, recompute ALL downstream state ──
+      if (i % 3 === 0 || i === allTitles.length - 1) {
+        const partialThemeWeights = extractThemes(enriched.map((m) => ({ overview: m.overview, genres: m.genres, sentiment: m.sentiment, sentimentMultiplier: m.sentimentMultiplier })));
+        const partialParadoxCards = detectParadoxes(enriched.map((m) => ({ genres: m.genres, themes: m.themes, sentiment: m.sentiment })));
+        const partialSentiment = calculateSentiment(enriched.map((m) => ({ genres: m.genres })));
+        const partialDrift = calculateDrift(enriched.map((m) => ({ watchDate: allTitles.find((r) => r.title.toLowerCase() === m.title.toLowerCase())?.watchDate, genres: m.genres, sentiment: m.sentiment, title: m.title })));
+        const partialPalette = enriched.slice(0, 5).flatMap((m) => m.posterColors.slice(0, 1)).slice(0, 5);
+        const partialPaletteNames = partialPalette.map(namePaletteColor);
+
+        set({
+          movies: [...enriched],
+          themeWeights: partialThemeWeights,
+          paradoxCards: partialParadoxCards,
+          sentimentSegments: partialSentiment,
+          driftPoints: partialDrift,
+          aggregatePalette: partialPalette.length > 0 ? partialPalette : fallbackPalette,
+          paletteNames: partialPaletteNames.length > 0 ? partialPaletteNames : fallbackPaletteNames,
+        });
+      }
     }
 
+    // ── Final Aggregation (full dataset) ──
     const themeWeights = extractThemes(enriched.map((m) => ({ overview: m.overview, genres: m.genres, sentiment: m.sentiment, sentimentMultiplier: m.sentimentMultiplier })));
     const paradoxCards = detectParadoxes(enriched.map((m) => ({ genres: m.genres, themes: m.themes, sentiment: m.sentiment })));
     const sentimentSegments = calculateSentiment(enriched.map((m) => ({ genres: m.genres })));
-    const driftPoints = calculateDrift(enriched.map((m) => ({ watchDate: allTitles.find((r) => r.title.toLowerCase() === m.title.toLowerCase())?.watchDate, genres: m.genres, sentiment: m.sentiment })));
+    const driftPoints = calculateDrift(enriched.map((m) => ({ watchDate: allTitles.find((r) => r.title.toLowerCase() === m.title.toLowerCase())?.watchDate, genres: m.genres, sentiment: m.sentiment, title: m.title })));
 
     const textualVecBase = nlpToVector(themeWeights, sentimentSegments, paradoxCards.length);
     for (const movie of enriched) movie.textualVector = textualVecBase;
@@ -339,13 +413,44 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
     }
     enriched.sort((a, b) => b.match - a.match);
     const archResult = matchArchetype(noisyVector);
+    
+    try {
+      const allGenres = enriched.flatMap((m) => m.genres);
+      const genreCounts: Record<string, number> = {};
+      for (const g of allGenres) genreCounts[g] = (genreCounts[g] || 0) + 1;
+      const topGenres = Object.entries(genreCounts).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([g]) => g);
 
-    set({
+      const dynamicArch = await generateDynamicArchetype({ 
+        themes: themeWeights.slice(0, 5).map(t => t.name), 
+        topGenres, 
+        sentimentSegments 
+      });
+      
+      if (dynamicArch) {
+        archResult.name = dynamicArch.name;
+        archResult.blurb = dynamicArch.blurb;
+      }
+    } catch (err) {
+      console.warn("Failed to fetch dynamic archetype:", err);
+    }
+
+    set((s) => ({
       movies: enriched, isEnriching: false, enrichProgress: 100,
       acousticProfile: aggAcoustic, aggregatePalette: aggPalette, paletteNames: aggPaletteNames,
       visualTraits: aggTraits, themeWeights, paradoxCards, sentimentSegments, driftPoints,
       fusedVector: noisyVector, archetype: archResult, selectedMovieId: enriched[0]?.id || "",
-    });
+      sessionId: s.sessionId + 1,
+    }));
+
+    // ── Re-trigger inspiration matching if colors were previously uploaded ──
+    const existingColors = get().inspirationColors;
+    if (existingColors.length > 0) {
+      const matches = matchInspirationColors(
+        existingColors,
+        enriched.map((m) => ({ id: m.id, posterColors: m.posterColors }))
+      );
+      set({ inspirationMatches: matches });
+    }
 
     if (get().ghostMode) {
       ghostSessionMap.set("movies", enriched);
@@ -398,14 +503,26 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
     if (!message.trim()) return;
     set({ isLLMLoading: true });
 
-    const { movies, themeWeights, archetype } = get();
+    const { movies, themeWeights, archetype, paradoxCards } = get();
     const allGenres = movies.flatMap((m) => m.genres);
     const dominantGenre = getDominantGenre(allGenres);
     const themes = themeWeights.slice(0, 5).map((t) => t.name);
 
+    // Compute top genres (top 3)
+    const genreCounts: Record<string, number> = {};
+    for (const g of allGenres) genreCounts[g] = (genreCounts[g] || 0) + 1;
+    const topGenres = Object.entries(genreCounts).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([g]) => g);
+
+    // Check if integrity anchor was triggered
+    const integrityTriggered = movies.some((m) => m.sentimentMultiplier === -5.0);
+    const paradoxText = paradoxCards[0]?.text || "";
+
     const answer = await askCineBrain(message, dominantGenre, {
       themes,
       archetype: archetype.name,
+      topGenres,
+      paradoxText,
+      integrityTriggered,
     });
 
     set((s) => ({
@@ -423,7 +540,7 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
       movies.map((m) => ({ id: m.id, posterColors: m.posterColors }))
     );
 
-    set({ inspirationMatches: matches });
+    set({ inspirationMatches: matches, inspirationColors: colors });
   },
 
   reset: () => {
@@ -444,6 +561,8 @@ export const useCineBrainStore = create<CineBrainStore>((set, get) => ({
       isEnriching: false,
       enrichProgress: 0,
       hasIngested: false,
+      inspirationColors: [],
+      inspirationMatches: [],
       fusedVector: Array(128).fill(0),
       archetype: defaultArchetype,
       audit: defaultAudit,
